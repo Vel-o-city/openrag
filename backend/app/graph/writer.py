@@ -12,6 +12,18 @@ def new_id() -> str:
     return str(uuid.uuid4())
 
 
+async def wipe_graph(driver: AsyncDriver) -> None:
+    """Deletes every node and relationship — a full hard reset. There's no
+    curated seed set to reset *to* yet (that's a Day-7 item), so this leaves
+    an empty graph rather than pretending one exists."""
+
+    async def _tx(tx: AsyncManagedTransaction) -> None:
+        await tx.run("MATCH (n) DETACH DELETE n")
+
+    async with driver.session() as session:
+        await session.execute_write(_tx)
+
+
 async def find_document_by_sha256(driver: AsyncDriver, sha256: str) -> dict | None:
     async def _tx(tx: AsyncManagedTransaction) -> dict | None:
         result = await tx.run(
@@ -32,6 +44,78 @@ async def get_document(driver: AsyncDriver, document_id: str) -> dict | None:
 
     async with driver.session() as session:
         return await session.execute_read(_tx)
+
+
+async def list_documents_by_age(driver: AsyncDriver, oldest_first: bool = True) -> list[dict]:
+    order = "ASC" if oldest_first else "DESC"
+
+    async def _tx(tx: AsyncManagedTransaction) -> list[dict]:
+        result = await tx.run(f"MATCH (d:Document) RETURN d.id AS id, d.uploaded_at AS uploaded_at ORDER BY d.uploaded_at {order}")
+        return [record.data() async for record in result]
+
+    async with driver.session() as session:
+        return await session.execute_read(_tx)
+
+
+async def count_all_nodes(driver: AsyncDriver) -> int:
+    async def _tx(tx: AsyncManagedTransaction) -> int:
+        result = await tx.run("MATCH (n) RETURN count(n) AS c")
+        record = await result.single()
+        return record["c"] if record else 0
+
+    async with driver.session() as session:
+        return await session.execute_read(_tx)
+
+
+async def prune_orphaned_entities(driver: AsyncDriver) -> int:
+    """Deletes any Entity with no remaining MENTIONS from any chunk — a
+    general cleanup pass, not scoped to one document, since orphans can
+    accumulate from partial extraction failures too."""
+
+    async def _tx(tx: AsyncManagedTransaction) -> int:
+        result = await tx.run(
+            """
+            MATCH (e:Entity)
+            WHERE NOT (e)<-[:MENTIONS]-()
+            WITH collect(e) AS orphans
+            FOREACH (e IN orphans | DETACH DELETE e)
+            RETURN size(orphans) AS orphan_count
+            """
+        )
+        record = await result.single()
+        return record["orphan_count"] if record else 0
+
+    async with driver.session() as session:
+        return await session.execute_write(_tx)
+
+
+async def delete_document_cascade(driver: AsyncDriver, document_id: str) -> dict | None:
+    """Deletes a Document and its Chunks, then prunes any Entity left with
+    no remaining mentions. Returns None if the document doesn't exist."""
+
+    async def _tx(tx: AsyncManagedTransaction) -> dict | None:
+        result = await tx.run(
+            """
+            MATCH (d:Document {id: $document_id})
+            OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c:Chunk)
+            WITH d, collect(c) AS chunks
+            FOREACH (c IN chunks | DETACH DELETE c)
+            WITH d, size(chunks) AS chunk_count
+            DETACH DELETE d
+            RETURN chunk_count
+            """,
+            document_id=document_id,
+        )
+        return await result.single()
+
+    async with driver.session() as session:
+        record = await session.execute_write(_tx)
+
+    if record is None:
+        return None
+
+    orphans_deleted = await prune_orphaned_entities(driver)
+    return {"chunks_deleted": record["chunk_count"], "orphans_deleted": orphans_deleted}
 
 
 async def write_document(

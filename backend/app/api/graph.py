@@ -1,8 +1,19 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel
+from redis.asyncio import Redis
 
+from app.config import settings
+from app.deps import get_redis
 from app.graph.neo4j_client import get_driver
+from app.rate_limiter import limiter
+from app.security.ip import hash_client_ip
+from app.security.moderation import flag_entity
 
 router = APIRouter(prefix="/api/graph", tags=["graph"])
+
+
+class FlagRequest(BaseModel):
+    reason: str | None = None
 
 
 @router.get("")
@@ -89,3 +100,14 @@ async def get_neighbors(entity_id: str) -> dict:
     data = record.data()
     data["neighbors"] = [n for n in data["neighbors"] if n is not None]
     return data
+
+
+@router.post("/{entity_id}/flag")
+@limiter.limit(settings.flag_rate_limit)
+async def flag_node(entity_id: str, request: Request, body: FlagRequest) -> dict:
+    """Public, unauthenticated — anyone can flag a node as objectionable.
+    Appends to an append-only log for later manual review via
+    GET /api/admin/moderation; nothing is auto-removed from the graph."""
+    redis: Redis = get_redis()
+    await flag_entity(redis, entity_id=entity_id, reason=body.reason, ip_hash=hash_client_ip(request))
+    return {"status": "flagged"}
