@@ -1,10 +1,25 @@
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { render } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 
+// jsdom has no real canvas backend, and this component's only job here is to
+// mount without crashing — the graph rendering itself isn't unit-test territory.
+vi.mock('react-force-graph-2d', () => ({
+  default: () => null,
+}))
+
 describe('App', () => {
-  it('renders the placeholder shell', () => {
-    render(<App />)
-    expect(screen.getByText(/graph explorer coming/i)).toBeInTheDocument()
+  beforeEach(() => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        json: () => Promise.resolve({ nodes: [], edges: [], entities: 0, relationships: 0, documents: 0 }),
+      }),
+    )
+  })
+
+  it('renders without crashing', () => {
+    const { container } = render(<App />)
+    expect(container.firstChild).not.toBeNull()
   })
 })

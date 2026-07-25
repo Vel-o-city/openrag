@@ -7,6 +7,8 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from app.api.documents import jobs_router, router as documents_router
+from app.api.graph import router as graph_router
+from app.api.stats import router as stats_router
 from app.config import settings
 from app.deps import close_redis, get_redis, init_redis
 from app.graph.neo4j_client import close_driver, init_driver
@@ -41,6 +43,8 @@ def create_app() -> FastAPI:
 
     app.include_router(documents_router)
     app.include_router(jobs_router)
+    app.include_router(graph_router)
+    app.include_router(stats_router)
 
     @app.get("/api/health")
     async def health() -> dict:

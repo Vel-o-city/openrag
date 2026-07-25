@@ -1,7 +1,11 @@
+import { GraphExplorer } from './GraphExplorer'
+import { StatStrip } from './StatStrip'
+
 function App() {
   return (
-    <div className="flex h-full items-center justify-center bg-neutral-950 text-neutral-100">
-      <p className="text-sm text-neutral-400">OpenRAG — graph explorer coming in Day 4</p>
+    <div className="relative h-full w-full bg-neutral-950 text-neutral-100">
+      <GraphExplorer />
+      <StatStrip />
     </div>
   )
 }
