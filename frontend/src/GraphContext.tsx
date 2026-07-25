@@ -1,6 +1,7 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
+const NEW_NODE_HIGHLIGHT_MS = 4000
 
 export interface GraphNode {
   id: string
@@ -24,32 +25,59 @@ interface GraphContextValue {
   focusNodes: (ids: string[]) => void
   clearFocus: () => void
   nodeById: (id: string) => GraphNode | undefined
+  newNodeIds: Set<string>
+  refreshGraph: () => Promise<void>
 }
 
 const GraphContext = createContext<GraphContextValue | null>(null)
 
+async function fetchGraph(): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
+  const res = await fetch(`${API_BASE}/api/graph?limit=1000`)
+  const json = await res.json()
+  return { nodes: json.nodes ?? [], edges: json.edges ?? [] }
+}
+
 /**
  * Fetches the graph once and lifts it — along with the "currently focused"
- * node-id set — to app level. Node click, chat citations, and (eventually)
- * upload completion all just call focusNodes(); this is the one place that
- * decides what's highlighted.
+ * node-id set — to app level. Node click, chat citations, and upload
+ * completion all just call focusNodes()/refreshGraph(); this is the one
+ * place that decides what's highlighted.
  */
 export function GraphProvider({ children }: { children: ReactNode }) {
   const [nodes, setNodes] = useState<GraphNode[]>([])
   const [edges, setEdges] = useState<GraphEdge[]>([])
   const [focusedIds, setFocusedIds] = useState<Set<string>>(new Set())
+  const [newNodeIds, setNewNodeIds] = useState<Set<string>>(new Set())
+  const nodesRef = useRef<GraphNode[]>([])
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/graph?limit=1000`)
-      .then((res) => res.json())
-      .then((json) => {
-        setNodes(json.nodes ?? [])
-        setEdges(json.edges ?? [])
+    nodesRef.current = nodes
+  }, [nodes])
+
+  useEffect(() => {
+    fetchGraph()
+      .then(({ nodes, edges }) => {
+        setNodes(nodes)
+        setEdges(edges)
       })
       .catch(() => {
         setNodes([])
         setEdges([])
       })
+  }, [])
+
+  const refreshGraph = useCallback(async () => {
+    const previousIds = new Set(nodesRef.current.map((node) => node.id))
+    const { nodes: freshNodes, edges: freshEdges } = await fetchGraph()
+
+    setNodes(freshNodes)
+    setEdges(freshEdges)
+
+    const addedIds = freshNodes.filter((node) => !previousIds.has(node.id)).map((node) => node.id)
+    if (addedIds.length > 0) {
+      setNewNodeIds(new Set(addedIds))
+      setTimeout(() => setNewNodeIds(new Set()), NEW_NODE_HIGHLIGHT_MS)
+    }
   }, [])
 
   const nodesById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes])
@@ -62,8 +90,10 @@ export function GraphProvider({ children }: { children: ReactNode }) {
       focusNodes: (ids: string[]) => setFocusedIds(new Set(ids)),
       clearFocus: () => setFocusedIds(new Set()),
       nodeById: (id: string) => nodesById.get(id),
+      newNodeIds,
+      refreshGraph,
     }),
-    [nodes, edges, focusedIds, nodesById],
+    [nodes, edges, focusedIds, nodesById, newNodeIds, refreshGraph],
   )
 
   return <GraphContext.Provider value={value}>{children}</GraphContext.Provider>

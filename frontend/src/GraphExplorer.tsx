@@ -15,13 +15,14 @@ const DIMMED_NODE_COLOR = 'rgba(148, 163, 184, 0.15)'
 const HIGHLIGHTED_LINK_COLOR = 'rgba(96, 165, 250, 0.9)'
 const DIMMED_LINK_COLOR = 'rgba(148, 163, 184, 0.08)'
 const DEFAULT_LINK_COLOR = 'rgba(148, 163, 184, 0.35)'
+const NEW_NODE_RING_COLOR = 'rgba(250, 204, 21, 0.9)'
 
 function endpointId(end: string | GraphNode): string {
   return typeof end === 'string' ? end : end.id
 }
 
 export function GraphExplorer() {
-  const { nodes, edges, focusedIds, focusNodes } = useGraph()
+  const { nodes, edges, focusedIds, focusNodes, newNodeIds } = useGraph()
   const [selected, setSelected] = useState<GraphNode | null>(null)
   const fgRef = useRef<ForceGraphMethods<GraphNode, GraphEdge> | undefined>(undefined)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -79,6 +80,16 @@ export function GraphExplorer() {
         linkDirectionalParticleWidth={3}
         linkDirectionalArrowLength={3}
         linkDirectionalArrowRelPos={1}
+        nodeCanvasObjectMode={() => 'after'}
+        nodeCanvasObject={(node, ctx) => {
+          const n = node as GraphNode & { x?: number; y?: number }
+          if (!newNodeIds.has(n.id) || n.x === undefined || n.y === undefined) return
+          ctx.beginPath()
+          ctx.arc(n.x, n.y, 9, 0, 2 * Math.PI)
+          ctx.strokeStyle = NEW_NODE_RING_COLOR
+          ctx.lineWidth = 2
+          ctx.stroke()
+        }}
         onNodeClick={(node) => {
           const n = node as GraphNode
           setSelected(n)

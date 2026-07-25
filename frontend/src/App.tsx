@@ -2,6 +2,7 @@ import { ChatPanel } from './ChatPanel'
 import { GraphExplorer } from './GraphExplorer'
 import { GraphProvider } from './GraphContext'
 import { StatStrip } from './StatStrip'
+import { UploadPanel } from './UploadPanel'
 
 function App() {
   return (
@@ -10,6 +11,7 @@ function App() {
         <div className="relative min-w-0 flex-1">
           <GraphExplorer />
           <StatStrip />
+          <UploadPanel />
         </div>
         <ChatPanel />
       </div>
