@@ -25,3 +25,4 @@ dist-ssr/
 # Local backup dumps (see backups/ workflow — real backups live in the repo,
 # but scratch/manual dumps taken while developing shouldn't be committed by accident)
 backend/scratch_dumps/
+.secrets/
