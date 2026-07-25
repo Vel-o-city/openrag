@@ -1,16 +1,55 @@
-from fastapi import APIRouter, HTTPException, Request, UploadFile
+import hashlib
+import logging
+
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, UploadFile
 from redis.asyncio import Redis
 
 from app.deps import get_redis
+from app.graph.neo4j_client import get_driver
+from app.graph import writer as graph_writer
+from app.ingestion.pipeline import process_document
 from app.ingestion.precheck import extract_native_text, has_usable_native_text
 from app.ingestion.validation import UploadValidationError, validate_upload
-from app.jobs.manager import create_job, get_job_status, new_job_id
+from app.jobs.manager import create_job, get_job_status, new_job_id, set_job_status
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
 
+def _hash_client_ip(request: Request) -> str:
+    client_host = request.client.host if request.client else "unknown"
+    return hashlib.sha256(client_host.encode()).hexdigest()
+
+
+async def _run_pipeline(
+    *,
+    document_id: str,
+    job_id: str,
+    filename: str,
+    content: bytes,
+    mime_type: str,
+    upload_ip_hash: str,
+) -> None:
+    redis: Redis = get_redis()
+    try:
+        await process_document(
+            get_driver(),
+            redis,
+            document_id=document_id,
+            job_id=job_id,
+            filename=filename,
+            content=content,
+            mime_type=mime_type,
+            upload_ip_hash=upload_ip_hash,
+        )
+    except Exception as exc:
+        logger.exception("Ingestion pipeline failed for document %s", document_id)
+        await set_job_status(redis, job_id, status="failed", error=str(exc))
+
+
 @router.post("")
-async def upload_document(request: Request, file: UploadFile) -> dict:
+async def upload_document(request: Request, background_tasks: BackgroundTasks, file: UploadFile) -> dict:
     content = await file.read()
 
     try:
@@ -29,9 +68,15 @@ async def upload_document(request: Request, file: UploadFile) -> dict:
     redis: Redis = get_redis()
     await create_job(redis, job_id, document_id)
 
-    # Day 2 wires up the actual background extraction task here (asyncio.Semaphore
-    # + entity resolution + Cypher writer). For now the job is recorded as queued
-    # so the polling/SSE contract can be built and tested against real responses.
+    background_tasks.add_task(
+        _run_pipeline,
+        document_id=document_id,
+        job_id=job_id,
+        filename=file.filename or "upload",
+        content=content,
+        mime_type=mime_type,
+        upload_ip_hash=_hash_client_ip(request),
+    )
 
     return {
         "document_id": document_id,
@@ -44,7 +89,10 @@ async def upload_document(request: Request, file: UploadFile) -> dict:
 
 @router.get("/{document_id}")
 async def get_document(document_id: str) -> dict:
-    raise HTTPException(status_code=501, detail="Document metadata storage lands in Day 2's Cypher writer.")
+    document = await graph_writer.get_document(get_driver(), document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    return document
 
 
 jobs_router = APIRouter(prefix="/api/jobs", tags=["jobs"])
