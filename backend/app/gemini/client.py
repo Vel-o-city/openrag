@@ -1,8 +1,12 @@
+import logging
+
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 
 from app.config import settings
 from app.ingestion.schemas import ExtractionResult, VisionExtractionResult
+
+logger = logging.getLogger(__name__)
 
 _client: genai.Client | None = None
 
@@ -39,6 +43,18 @@ def get_client() -> genai.Client:
     return _client
 
 
+def _is_quota_error(exc: Exception) -> bool:
+    """True for a 429/RESOURCE_EXHAUSTED response — each free-tier Flash
+    model/family has its own separate daily quota, so this is the specific
+    signal to fall back to the next model rather than fail outright. Any
+    other error (bad request, invalid schema, etc.) would fail identically
+    on every model and should propagate immediately instead of being masked
+    by three slow retries."""
+    return isinstance(exc, errors.ClientError) and (
+        exc.code == 429 or exc.status == "RESOURCE_EXHAUSTED"
+    )
+
+
 async def embed_texts(texts: list[str]) -> list[list[float]]:
     if not texts:
         return []
@@ -56,41 +72,78 @@ async def embed_text(text: str) -> list[float]:
 
 
 async def extract_from_text(text: str) -> ExtractionResult:
-    response = await get_client().aio.models.generate_content(
-        model=settings.extraction_model,
-        contents=EXTRACTION_PROMPT.format(text=text),
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=ExtractionResult,
-        ),
-    )
-    return response.parsed
+    last_exc: Exception | None = None
+    for model in settings.extraction_models:
+        try:
+            response = await get_client().aio.models.generate_content(
+                model=model,
+                contents=EXTRACTION_PROMPT.format(text=text),
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=ExtractionResult,
+                ),
+            )
+            return response.parsed
+        except Exception as exc:
+            if not _is_quota_error(exc):
+                raise
+            logger.warning("Extraction model %s exhausted its quota, falling back", model)
+            last_exc = exc
+    raise last_exc  # type: ignore[misc]
+
+
+async def extract_from_image(image_bytes: bytes, mime_type: str) -> VisionExtractionResult:
+    last_exc: Exception | None = None
+    for model in settings.extraction_models:
+        try:
+            response = await get_client().aio.models.generate_content(
+                model=model,
+                contents=[
+                    types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                    types.Part.from_text(text=VISION_EXTRACTION_PROMPT),
+                ],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=VisionExtractionResult,
+                ),
+            )
+            return response.parsed
+        except Exception as exc:
+            if not _is_quota_error(exc):
+                raise
+            logger.warning("Extraction model %s exhausted its quota, falling back", model)
+            last_exc = exc
+    raise last_exc  # type: ignore[misc]
 
 
 async def chat_stream(system_prompt: str, user_message: str):
     """Yields text deltas from a tool-less, read-only chat completion. No
     browsing/code-exec is ever wired up here — even a successful prompt
-    injection has nothing dangerous to do."""
-    stream = await get_client().aio.models.generate_content_stream(
-        model=settings.chat_model,
-        contents=user_message,
-        config=types.GenerateContentConfig(system_instruction=system_prompt),
-    )
-    async for chunk in stream:
-        if chunk.text:
-            yield chunk.text
+    injection has nothing dangerous to do.
 
-
-async def extract_from_image(image_bytes: bytes, mime_type: str) -> VisionExtractionResult:
-    response = await get_client().aio.models.generate_content(
-        model=settings.extraction_model,
-        contents=[
-            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-            types.Part.from_text(text=VISION_EXTRACTION_PROMPT),
-        ],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=VisionExtractionResult,
-        ),
-    )
-    return response.parsed
+    Falls back to the next configured model on a quota error, but only if
+    nothing has been yielded yet for this request — once tokens have
+    reached the client there's no clean way to restart the answer from a
+    different model mid-stream, so a failure past that point just propagates
+    to the caller's own error handling instead.
+    """
+    last_exc: Exception | None = None
+    for model in settings.chat_models:
+        yielded_any = False
+        try:
+            stream = await get_client().aio.models.generate_content_stream(
+                model=model,
+                contents=user_message,
+                config=types.GenerateContentConfig(system_instruction=system_prompt),
+            )
+            async for chunk in stream:
+                if chunk.text:
+                    yielded_any = True
+                    yield chunk.text
+            return
+        except Exception as exc:
+            if yielded_any or not _is_quota_error(exc):
+                raise
+            logger.warning("Chat model %s exhausted its quota, falling back", model)
+            last_exc = exc
+    raise last_exc  # type: ignore[misc]
