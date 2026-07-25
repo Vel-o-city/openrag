@@ -1,0 +1,23 @@
+name: Keep Render service awake
+
+# Render's free tier spins down after 15 min of no traffic (~30-60s cold start
+# on next request). Pinging every 10 min keeps it warm without exceeding the
+# 750 free instance-hours/month cap (744 hrs in a 31-day month if always on).
+# Requires the repo variable RENDER_APP_URL to be set to your deployed
+# service's public URL — see README "Hosting setup" section.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping health endpoint
+        run: |
+          if [ -z "${{ vars.RENDER_APP_URL }}" ]; then
+            echo "RENDER_APP_URL repo variable not set yet — skipping (set it once deployed)."
+            exit 0
+          fi
+          curl -fsS "${{ vars.RENDER_APP_URL }}/api/health"

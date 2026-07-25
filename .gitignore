@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Node / frontend
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Editors / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Local backup dumps (see backups/ workflow — real backups live in the repo,
+# but scratch/manual dumps taken while developing shouldn't be committed by accident)
+backend/scratch_dumps/

@@ -1,0 +1,1 @@
+Automated daily graph export lands here as `latest.json`, written by `.github/workflows/backup-graph.yml`. Git history on that one file is the rollback mechanism — no separate dated files, so this directory doesn't grow unbounded.
