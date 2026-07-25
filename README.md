@@ -2,7 +2,7 @@
 
 **A live, public knowledge graph you can see, extend, and chat with — grounded, cited answers instead of black-box RAG.**
 
-> 🚧 Under active development. Live demo link and screenshots land here once Day 7 (of the build plan below) wraps up.
+> 🚧 Under active development. **[Live demo](https://openrag.6sanket9.workers.dev)** is deployed but currently just a placeholder page — the real graph explorer/chat UI lands across Days 4-7 of the build plan below. Backend API is fully live at every step so far.
 
 ## What is this?
 
