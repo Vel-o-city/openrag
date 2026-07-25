@@ -2,19 +2,18 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 
+from app.api.chat import router as chat_router
 from app.api.documents import jobs_router, router as documents_router
 from app.api.graph import router as graph_router
 from app.api.stats import router as stats_router
 from app.config import settings
 from app.deps import close_redis, get_redis, init_redis
 from app.graph.neo4j_client import close_driver, init_driver
+from app.rate_limiter import limiter
 from scripts.bootstrap_schema import bootstrap_schema
-
-limiter = Limiter(key_func=get_remote_address, storage_uri=settings.redis_url)
 
 
 @asynccontextmanager
@@ -45,6 +44,7 @@ def create_app() -> FastAPI:
     app.include_router(jobs_router)
     app.include_router(graph_router)
     app.include_router(stats_router)
+    app.include_router(chat_router)
 
     @app.get("/api/health")
     async def health() -> dict:
