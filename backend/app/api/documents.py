@@ -1,9 +1,10 @@
 import hashlib
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Form, HTTPException, Request, UploadFile
 from redis.asyncio import Redis
 
+from app.config import settings
 from app.deps import get_redis
 from app.graph.neo4j_client import get_driver
 from app.graph import writer as graph_writer
@@ -11,6 +12,8 @@ from app.ingestion.pipeline import process_document
 from app.ingestion.precheck import extract_native_text, has_usable_native_text
 from app.ingestion.validation import UploadValidationError, validate_upload
 from app.jobs.manager import create_job, get_job_status, new_job_id, set_job_status
+from app.rate_limiter import limiter
+from app.security.turnstile import verify_turnstile_token
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +52,17 @@ async def _run_pipeline(
 
 
 @router.post("")
-async def upload_document(request: Request, background_tasks: BackgroundTasks, file: UploadFile) -> dict:
+@limiter.limit(settings.upload_rate_limit)
+async def upload_document(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    file: UploadFile,
+    turnstile_token: str | None = Form(None),
+) -> dict:
+    client_host = request.client.host if request.client else None
+    if not await verify_turnstile_token(turnstile_token, client_host):
+        raise HTTPException(status_code=403, detail="Turnstile verification failed. Please try again.")
+
     content = await file.read()
 
     try:
