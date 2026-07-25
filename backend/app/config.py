@@ -35,9 +35,24 @@ class Settings(BaseSettings):
 
     upload_rate_limit: str = "5/hour"
     chat_rate_limit: str = "20/hour"
+    flag_rate_limit: str = "10/hour"
 
     daily_cost_budget_usd: float = 5.0
     per_ip_daily_cost_budget_usd: float = 0.5
+
+    # Rough Flash-tier per-token costs for budget-guard estimation only — not
+    # billing-accurate, and moot while everything above runs on the free
+    # tier. Verify against ai.google.dev/gemini-api/docs/pricing before
+    # relying on this if the project ever moves to a paid plan.
+    cost_per_1k_input_tokens_usd: float = 0.0003
+    cost_per_1k_output_tokens_usd: float = 0.0025
+    max_estimated_chat_output_tokens: int = 1500
+    max_estimated_extraction_output_tokens: int = 800
+    typical_chat_context_tokens: int = 2000  # rough upper bound on assembled retrieval context
+    estimated_vision_input_tokens: int = 1500  # rough per-image cost — no raw text to measure upfront
+
+    max_graph_nodes: int = 3000
+    prune_check_interval_seconds: int = 21600  # 6 hours
 
     cors_origins: list[str] = ["http://localhost:5173"]
 

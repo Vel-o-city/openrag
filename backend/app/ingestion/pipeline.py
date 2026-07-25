@@ -17,6 +17,7 @@ from typing import Awaitable, Callable, TypeVar
 from neo4j import AsyncDriver
 from redis.asyncio import Redis
 
+from app.config import settings
 from app.gemini.client import embed_text, embed_texts, extract_from_image, extract_from_text
 from app.graph.writer import (
     find_document_by_sha256,
@@ -32,6 +33,7 @@ from app.ingestion.precheck import extract_native_text, looks_like_readable_text
 from app.ingestion.schemas import ExtractionResult, VisionExtractionResult
 from app.ingestion.vision import render_pdf_page_to_png
 from app.jobs.manager import set_job_status
+from app.security.budget import estimate_cost_usd, estimate_tokens, reserve_budget
 
 logger = logging.getLogger(__name__)
 
@@ -120,11 +122,19 @@ async def _write_extraction(
 
 
 async def _process_native_page(
-    driver: AsyncDriver, *, document_id: str, page_number: int, text: str
+    driver: AsyncDriver, redis: Redis, ip_hash: str, *, document_id: str, page_number: int, text: str
 ) -> bool:
     """Returns True if every chunk on this page extracted cleanly."""
     all_ok = True
     for chunk_index, chunk in enumerate(chunk_text(text)):
+        estimated_cost = estimate_cost_usd(
+            estimate_tokens(chunk), settings.max_estimated_extraction_output_tokens
+        )
+        if not await reserve_budget(redis, ip_hash, estimated_cost):
+            logger.warning("Extraction skipped for page %d chunk %d: daily budget exceeded", page_number, chunk_index)
+            all_ok = False
+            continue
+
         extraction = await _with_one_retry(lambda c=chunk: extract_from_text(c))
         if extraction is None:
             all_ok = False
@@ -149,10 +159,17 @@ async def _process_native_page(
 
 
 async def _process_vision_page(
-    driver: AsyncDriver, *, document_id: str, page_number: int, image_bytes: bytes, image_mime: str
+    driver: AsyncDriver, redis: Redis, ip_hash: str, *, document_id: str, page_number: int, image_bytes: bytes, image_mime: str
 ) -> bool:
     """Scanned/image pages are treated as one chunk each, reusing the single
     combined vision call's transcription + entities/relationships."""
+    estimated_cost = estimate_cost_usd(
+        settings.estimated_vision_input_tokens, settings.max_estimated_extraction_output_tokens
+    )
+    if not await reserve_budget(redis, ip_hash, estimated_cost):
+        logger.warning("Vision extraction skipped for page %d: daily budget exceeded", page_number)
+        return False
+
     extraction: VisionExtractionResult | None = await _with_one_retry(
         lambda: extract_from_image(image_bytes, image_mime)
     )
@@ -219,7 +236,7 @@ async def process_document(
         try:
             if source_type == "pdf" and looks_like_readable_text(native_text):
                 ok = await _process_native_page(
-                    driver, document_id=document_id, page_number=page_number, text=native_text
+                    driver, redis, upload_ip_hash, document_id=document_id, page_number=page_number, text=native_text
                 )
             else:
                 image_bytes = (
@@ -230,6 +247,8 @@ async def process_document(
                 image_mime = "image/png" if source_type == "pdf" else mime_type
                 ok = await _process_vision_page(
                     driver,
+                    redis,
+                    upload_ip_hash,
                     document_id=document_id,
                     page_number=page_number,
                     image_bytes=image_bytes,

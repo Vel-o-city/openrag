@@ -1,4 +1,3 @@
-import hashlib
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Form, HTTPException, Request, UploadFile
@@ -13,16 +12,12 @@ from app.ingestion.precheck import extract_native_text, has_usable_native_text
 from app.ingestion.validation import UploadValidationError, validate_upload
 from app.jobs.manager import create_job, get_job_status, new_job_id, set_job_status
 from app.rate_limiter import limiter
+from app.security.ip import hash_client_ip
 from app.security.turnstile import verify_turnstile_token
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
-
-
-def _hash_client_ip(request: Request) -> str:
-    client_host = request.client.host if request.client else "unknown"
-    return hashlib.sha256(client_host.encode()).hexdigest()
 
 
 async def _run_pipeline(
@@ -88,7 +83,7 @@ async def upload_document(
         filename=file.filename or "upload",
         content=content,
         mime_type=mime_type,
-        upload_ip_hash=_hash_client_ip(request),
+        upload_ip_hash=hash_client_ip(request),
     )
 
     return {
