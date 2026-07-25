@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import ForceGraph2D, { type ForceGraphMethods, type NodeObject, type LinkObject } from 'react-force-graph-2d'
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
+import ForceGraph2D, { type ForceGraphMethods } from 'react-force-graph-2d'
+import { useGraph, type GraphEdge, type GraphNode } from './GraphContext'
 
 const ENTITY_TYPE_COLORS: Record<string, string> = {
   Person: '#f97316',
@@ -12,59 +11,80 @@ const ENTITY_TYPE_COLORS: Record<string, string> = {
   Other: '#94a3b8',
 }
 
-interface GraphNode extends NodeObject {
-  id: string
-  name: string
-  entity_type: string
-  description: string
-  mention_count: number
-}
+const DIMMED_NODE_COLOR = 'rgba(148, 163, 184, 0.15)'
+const HIGHLIGHTED_LINK_COLOR = 'rgba(96, 165, 250, 0.9)'
+const DIMMED_LINK_COLOR = 'rgba(148, 163, 184, 0.08)'
+const DEFAULT_LINK_COLOR = 'rgba(148, 163, 184, 0.35)'
 
-interface GraphEdge extends LinkObject {
-  source: string
-  target: string
-  predicate: string
-  description: string
-}
-
-interface GraphData {
-  nodes: GraphNode[]
-  edges: GraphEdge[]
+function endpointId(end: string | GraphNode): string {
+  return typeof end === 'string' ? end : end.id
 }
 
 export function GraphExplorer() {
-  const [data, setData] = useState<GraphData>({ nodes: [], edges: [] })
+  const { nodes, edges, focusedIds, focusNodes } = useGraph()
   const [selected, setSelected] = useState<GraphNode | null>(null)
   const fgRef = useRef<ForceGraphMethods<GraphNode, GraphEdge> | undefined>(undefined)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [size, setSize] = useState({ width: 0, height: 0 })
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/graph?limit=1000`)
-      .then((res) => res.json())
-      .then((json) => setData({ nodes: json.nodes, edges: json.edges }))
-      .catch(() => setData({ nodes: [], edges: [] }))
+    const container = containerRef.current
+    if (!container) return
+
+    const observer = new ResizeObserver(([entry]) => {
+      const { width, height } = entry.contentRect
+      setSize({ width, height })
+    })
+    observer.observe(container)
+    return () => observer.disconnect()
   }, [])
 
+  useEffect(() => {
+    if (focusedIds.size === 0) return
+    // Let the graph's simulation settle a beat before measuring node
+    // positions for zoomToFit, or it fits against stale coordinates.
+    const timeout = setTimeout(() => {
+      fgRef.current?.zoomToFit(600, 120, (node) => focusedIds.has((node as GraphNode).id))
+    }, 50)
+    return () => clearTimeout(timeout)
+  }, [focusedIds])
+
+  const isDimmed = (id: string) => focusedIds.size > 0 && !focusedIds.has(id)
+  const isCitedLink = (link: GraphEdge) =>
+    focusedIds.has(endpointId(link.source)) && focusedIds.has(endpointId(link.target))
+
   return (
-    <div className="relative h-full w-full">
+    <div ref={containerRef} className="relative h-full w-full">
       <ForceGraph2D
         ref={fgRef}
-        graphData={{
-          nodes: data.nodes,
-          links: data.edges.map((e) => ({ ...e, source: e.source, target: e.target })),
-        }}
+        width={size.width}
+        height={size.height}
+        graphData={{ nodes, links: edges.map((edge) => ({ ...edge })) }}
         backgroundColor="#0a0a0a"
         nodeLabel={(node) => `${(node as GraphNode).name} (${(node as GraphNode).entity_type})`}
-        nodeColor={(node) => ENTITY_TYPE_COLORS[(node as GraphNode).entity_type] ?? '#94a3b8'}
+        nodeColor={(node) => {
+          const n = node as GraphNode
+          if (isDimmed(n.id)) return DIMMED_NODE_COLOR
+          return ENTITY_TYPE_COLORS[n.entity_type] ?? '#94a3b8'
+        }}
         nodeRelSize={5}
         linkLabel={(link) => (link as GraphEdge).predicate}
-        linkColor={() => 'rgba(148, 163, 184, 0.35)'}
+        linkColor={(link) => {
+          const l = link as GraphEdge
+          if (focusedIds.size === 0) return DEFAULT_LINK_COLOR
+          return isCitedLink(l) ? HIGHLIGHTED_LINK_COLOR : DIMMED_LINK_COLOR
+        }}
+        linkWidth={(link) => (isCitedLink(link as GraphEdge) ? 2 : 1)}
+        linkDirectionalParticles={(link) => (isCitedLink(link as GraphEdge) ? 4 : 0)}
+        linkDirectionalParticleWidth={3}
         linkDirectionalArrowLength={3}
         linkDirectionalArrowRelPos={1}
         onNodeClick={(node) => {
-          setSelected(node as GraphNode)
-          fgRef.current?.centerAt((node.x ?? 0), (node.y ?? 0), 600)
-          fgRef.current?.zoom(4, 600)
+          const n = node as GraphNode
+          setSelected(n)
+          focusNodes([n.id])
         }}
+        onBackgroundClick={() => setSelected(null)}
       />
 
       {selected && (
