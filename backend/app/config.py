@@ -13,15 +13,19 @@ class Settings(BaseSettings):
     # Model IDs shift fast — check ai.google.dev/gemini-api/docs/models for the
     # current flash-tier models before deploying; these are current as of Jul 2026.
     # Each free-tier Flash model/family has its own separate daily quota, so
-    # extraction/chat calls fall back down this list on RESOURCE_EXHAUSTED
-    # rather than failing outright once the first model's quota is used up.
-    # NOTE: gemini-2.0-flash and gemini-2.0-flash-lite were deprecated and
-    # shut down June 1, 2026 — don't add them back.
+    # extraction/chat calls fall back down this list on quota exhaustion or a
+    # model being unavailable, rather than failing outright.
+    # NOTE: gemini-2.0-flash(-lite) were deprecated and shut down June 1, 2026.
+    # NOTE: the entire 2.5 generation (gemini-2.5-flash, gemini-2.5-flash-lite)
+    # returns 404 "no longer available to new users" on freshly-created API
+    # keys/projects — confirmed against this project's key. Only the 3.x
+    # generation is reachable on a new key; don't add 2.5-series models back
+    # without first confirming your specific key can actually reach them.
     gemini_api_key: str = ""
     embedding_model: str = "gemini-embedding-001"
     embedding_dimensions: int = 768
-    extraction_models: list[str] = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
-    chat_models: list[str] = ["gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+    extraction_models: list[str] = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]
+    chat_models: list[str] = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]
 
     turnstile_secret_key: str = ""
     admin_token: str = "changeme-local-dev-token"

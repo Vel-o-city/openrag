@@ -43,16 +43,25 @@ def get_client() -> genai.Client:
     return _client
 
 
-def _is_quota_error(exc: Exception) -> bool:
-    """True for a 429/RESOURCE_EXHAUSTED response — each free-tier Flash
-    model/family has its own separate daily quota, so this is the specific
-    signal to fall back to the next model rather than fail outright. Any
-    other error (bad request, invalid schema, etc.) would fail identically
-    on every model and should propagate immediately instead of being masked
-    by three slow retries."""
-    return isinstance(exc, errors.ClientError) and (
-        exc.code == 429 or exc.status == "RESOURCE_EXHAUSTED"
-    )
+def _is_model_unavailable_error(exc: Exception) -> bool:
+    """True for two distinct signals that this *model* (not our request) is
+    the problem, and the next one in the fallback list is worth trying:
+
+    - 429 RESOURCE_EXHAUSTED — each free-tier Flash model/family has its own
+      separate daily quota.
+    - 404 NOT_FOUND with a "no longer available to new users" message —
+      Google restricts some older model generations (observed: the whole
+      2.5 line) to accounts that already had access; new API keys get a 404
+      rather than a quota error.
+
+    Any other error (bad request, invalid schema, etc.) would fail
+    identically on every model and should propagate immediately instead of
+    being masked by repeated retries."""
+    if not isinstance(exc, errors.ClientError):
+        return False
+    if exc.code == 429 or exc.status == "RESOURCE_EXHAUSTED":
+        return True
+    return exc.code == 404 or exc.status == "NOT_FOUND"
 
 
 async def embed_texts(texts: list[str]) -> list[list[float]]:
@@ -85,9 +94,9 @@ async def extract_from_text(text: str) -> ExtractionResult:
             )
             return response.parsed
         except Exception as exc:
-            if not _is_quota_error(exc):
+            if not _is_model_unavailable_error(exc):
                 raise
-            logger.warning("Extraction model %s exhausted its quota, falling back", model)
+            logger.warning("Extraction model %s unavailable (quota/access), falling back to next model", model)
             last_exc = exc
     raise last_exc  # type: ignore[misc]
 
@@ -109,9 +118,9 @@ async def extract_from_image(image_bytes: bytes, mime_type: str) -> VisionExtrac
             )
             return response.parsed
         except Exception as exc:
-            if not _is_quota_error(exc):
+            if not _is_model_unavailable_error(exc):
                 raise
-            logger.warning("Extraction model %s exhausted its quota, falling back", model)
+            logger.warning("Extraction model %s unavailable (quota/access), falling back to next model", model)
             last_exc = exc
     raise last_exc  # type: ignore[misc]
 
@@ -121,11 +130,11 @@ async def chat_stream(system_prompt: str, user_message: str):
     browsing/code-exec is ever wired up here — even a successful prompt
     injection has nothing dangerous to do.
 
-    Falls back to the next configured model on a quota error, but only if
-    nothing has been yielded yet for this request — once tokens have
-    reached the client there's no clean way to restart the answer from a
-    different model mid-stream, so a failure past that point just propagates
-    to the caller's own error handling instead.
+    Falls back to the next configured model if it's exhausted or
+    unavailable, but only if nothing has been yielded yet for this request —
+    once tokens have reached the client there's no clean way to restart the
+    answer from a different model mid-stream, so a failure past that point
+    just propagates to the caller's own error handling instead.
     """
     last_exc: Exception | None = None
     for model in settings.chat_models:
@@ -142,8 +151,8 @@ async def chat_stream(system_prompt: str, user_message: str):
                     yield chunk.text
             return
         except Exception as exc:
-            if yielded_any or not _is_quota_error(exc):
+            if yielded_any or not _is_model_unavailable_error(exc):
                 raise
-            logger.warning("Chat model %s exhausted its quota, falling back", model)
+            logger.warning("Chat model %s unavailable (quota/access), falling back to next model", model)
             last_exc = exc
     raise last_exc  # type: ignore[misc]
