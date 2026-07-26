@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
+import { API_BASE } from './apiBase'
 import { useGraph } from './GraphContext'
 import { TurnstileWidget } from './TurnstileWidget'
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
 const POLL_INTERVAL_MS = 1500
 const MAX_POLL_ATTEMPTS = 80 // ~2 minutes
 

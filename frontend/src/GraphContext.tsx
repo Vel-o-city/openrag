@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { API_BASE } from './apiBase'
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
 const NEW_NODE_HIGHLIGHT_MS = 4000
 
 export interface GraphNode {

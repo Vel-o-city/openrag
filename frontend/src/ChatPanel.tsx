@@ -1,8 +1,7 @@
 import { useRef, useState } from 'react'
+import { API_BASE } from './apiBase'
 import { useGraph } from './GraphContext'
 import { streamSSE } from './sse'
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? ''
 
 interface Citations {
   entities: string[]
