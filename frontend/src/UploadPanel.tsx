@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { API_BASE } from './apiBase'
 import { useGraph } from './GraphContext'
+import { rememberOwnDocument } from './ownDocuments'
 import { TurnstileWidget } from './TurnstileWidget'
 
 const POLL_INTERVAL_MS = 1500
@@ -115,7 +116,10 @@ export function UploadPanel() {
         return
       }
 
-      const { job_id: jobId } = await response.json()
+      const { job_id: jobId, document_id: documentId } = await response.json()
+      // Remember it now, not on completion — the panel self-resets after a
+      // few seconds and the id would be gone.
+      rememberOwnDocument(documentId)
       setStage('extracting')
       setTimeout(() => pollJob(jobId), POLL_INTERVAL_MS)
     } catch {
