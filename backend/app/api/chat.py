@@ -8,6 +8,7 @@ from sse_starlette.sse import EventSourceResponse
 from app.chat.citations import parse_cited_labels, resolve_citations
 from app.chat.guardrails import find_unverified_urls
 from app.chat.prompts import CITATION_MARKER, SYSTEM_PROMPT, build_context_block, build_user_message
+from app.chat.schemas import CitationPayload
 from app.config import settings
 from app.deps import get_redis
 from app.gemini.client import chat_stream
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
-EMPTY_CITATIONS = {"entities": [], "relationships": [], "chunks": [], "documents": []}
+EMPTY_CITATIONS = CitationPayload().model_dump_json()
 
 BUDGET_EXCEEDED_MESSAGE = (
     "This demo has hit its daily budget cap — please check back tomorrow, "
@@ -42,7 +43,7 @@ async def _stream_chat_response(question: str, ip_hash: str):
     estimated_cost = estimate_cost_usd(estimated_input_tokens, settings.max_estimated_chat_output_tokens)
     if not await reserve_budget(get_redis(), ip_hash, estimated_cost):
         yield {"event": "token", "data": json.dumps({"text": BUDGET_EXCEEDED_MESSAGE})}
-        yield {"event": "citations", "data": json.dumps(EMPTY_CITATIONS)}
+        yield {"event": "citations", "data": EMPTY_CITATIONS}
         yield {"event": "done", "data": "{}"}
         return
 
@@ -94,16 +95,16 @@ async def _stream_chat_response(question: str, ip_hash: str):
         flagged_urls = find_unverified_urls(answer_text, [chunk.text for chunk in retrieval.chunks])
         if flagged_urls:
             logger.warning("Chat answer contained unverified URL(s): %s", flagged_urls)
-            citations["flagged_urls"] = flagged_urls
+            citations.flagged_urls = flagged_urls
 
-        yield {"event": "citations", "data": json.dumps(citations)}
+        yield {"event": "citations", "data": citations.model_dump_json()}
     except Exception:
         logger.exception("Chat stream failed for question: %r", question)
         yield {
             "event": "token",
             "data": json.dumps({"text": "\n\nSorry — something went wrong answering that. Please try again."}),
         }
-        yield {"event": "citations", "data": json.dumps(EMPTY_CITATIONS)}
+        yield {"event": "citations", "data": EMPTY_CITATIONS}
 
     yield {"event": "done", "data": "{}"}
 
