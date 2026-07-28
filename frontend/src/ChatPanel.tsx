@@ -97,7 +97,7 @@ export function ChatPanel() {
   }
 
   return (
-    <div className="flex h-full w-96 flex-shrink-0 flex-col border-l border-neutral-800 bg-neutral-950">
+    <div className="flex h-full w-full flex-col bg-neutral-950">
       <div className="border-b border-neutral-800 px-4 py-3">
         <h2 className="text-sm font-semibold text-neutral-100">Chat with the graph</h2>
         <p className="text-xs text-neutral-500">Grounded answers with clickable, graph-synced citations.</p>

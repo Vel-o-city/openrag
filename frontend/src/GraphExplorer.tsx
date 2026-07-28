@@ -1,15 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import ForceGraph2D, { type ForceGraphMethods } from 'react-force-graph-2d'
+import { colorForEntityType } from './entityColors'
 import { useGraph, type GraphEdge, type GraphNode } from './GraphContext'
-
-const ENTITY_TYPE_COLORS: Record<string, string> = {
-  Person: '#f97316',
-  Organization: '#38bdf8',
-  Location: '#a3e635',
-  Event: '#f472b6',
-  Concept: '#c084fc',
-  Other: '#94a3b8',
-}
 
 const DIMMED_NODE_COLOR = 'rgba(148, 163, 184, 0.15)'
 const HIGHLIGHTED_LINK_COLOR = 'rgba(96, 165, 250, 0.9)'
@@ -17,8 +9,20 @@ const DIMMED_LINK_COLOR = 'rgba(148, 163, 184, 0.08)'
 const DEFAULT_LINK_COLOR = 'rgba(148, 163, 184, 0.35)'
 const NEW_NODE_RING_COLOR = 'rgba(250, 204, 21, 0.9)'
 
+const FOCUS_PADDING = 120
+/** Focusing one node has no extent to fit, so cap how far in the camera goes. */
+const MAX_FOCUS_ZOOM = 2.5
+const FOCUS_ANIMATION_MS = 600
+
 function endpointId(end: string | GraphNode): string {
   return typeof end === 'string' ? end : end.id
+}
+
+/** The simulation writes x/y onto the node objects it was handed. */
+type PositionedNode = GraphNode & { x?: number; y?: number }
+
+function isPositioned(node: PositionedNode): node is GraphNode & { x: number; y: number } {
+  return typeof node.x === 'number' && typeof node.y === 'number'
 }
 
 export function GraphExplorer() {
@@ -34,6 +38,10 @@ export function GraphExplorer() {
 
     const observer = new ResizeObserver(([entry]) => {
       const { width, height } = entry.contentRect
+      // On mobile the inactive pane is display:none, which reports 0x0.
+      // Feeding that to the canvas throws away the simulation's layout, so
+      // hold the last real size until the pane is visible again.
+      if (width === 0 || height === 0) return
       setSize({ width, height })
     })
     observer.observe(container)
@@ -43,12 +51,36 @@ export function GraphExplorer() {
   useEffect(() => {
     if (focusedIds.size === 0) return
     // Let the graph's simulation settle a beat before measuring node
-    // positions for zoomToFit, or it fits against stale coordinates.
+    // positions, or the camera fits against stale coordinates.
     const timeout = setTimeout(() => {
-      fgRef.current?.zoomToFit(600, 120, (node) => focusedIds.has((node as GraphNode).id))
+      const fg = fgRef.current
+      if (!fg) return
+
+      const focused = (nodes as PositionedNode[]).filter(
+        (node) => focusedIds.has(node.id) && isPositioned(node),
+      ) as (GraphNode & { x: number; y: number })[]
+      if (focused.length === 0) return
+
+      const xs = focused.map((node) => node.x)
+      const ys = focused.map((node) => node.y)
+      const [minX, maxX] = [Math.min(...xs), Math.max(...xs)]
+      const [minY, maxY] = [Math.min(...ys), Math.max(...ys)]
+
+      // Computing the fit ourselves rather than calling zoomToFit lets the
+      // ceiling apply to the animation's target. zoomToFit would animate all
+      // the way in on a single node and then need yanking back out.
+      const availableWidth = Math.max(size.width - FOCUS_PADDING * 2, 1)
+      const availableHeight = Math.max(size.height - FOCUS_PADDING * 2, 1)
+      const fitZoom = Math.min(
+        availableWidth / Math.max(maxX - minX, 1),
+        availableHeight / Math.max(maxY - minY, 1),
+      )
+
+      fg.centerAt((minX + maxX) / 2, (minY + maxY) / 2, FOCUS_ANIMATION_MS)
+      fg.zoom(Math.min(fitZoom, MAX_FOCUS_ZOOM), FOCUS_ANIMATION_MS)
     }, 50)
     return () => clearTimeout(timeout)
-  }, [focusedIds])
+  }, [focusedIds, nodes, size.width, size.height])
 
   const isDimmed = (id: string) => focusedIds.size > 0 && !focusedIds.has(id)
   const isCitedLink = (link: GraphEdge) =>
@@ -66,7 +98,7 @@ export function GraphExplorer() {
         nodeColor={(node) => {
           const n = node as GraphNode
           if (isDimmed(n.id)) return DIMMED_NODE_COLOR
-          return ENTITY_TYPE_COLORS[n.entity_type] ?? '#94a3b8'
+          return colorForEntityType(n.entity_type)
         }}
         nodeRelSize={5}
         linkLabel={(link) => (link as GraphEdge).predicate}

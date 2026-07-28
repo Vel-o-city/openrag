@@ -2,7 +2,7 @@
 
 **A live, public knowledge graph you can see, extend, and chat with — grounded, cited answers instead of black-box RAG.**
 
-> 🚧 Under active development. **[Live demo](https://openrag.sanket.website)** is deployed but currently just a placeholder page — the real graph explorer/chat UI lands across Days 4-7 of the build plan below. Backend API is fully live at every step so far.
+> **[Try the live demo](https://openrag.sanket.website)** — the graph explorer, upload flow, and cited chat are all live. A few documents are pinned as a starting point so the graph is never empty; everything else is what visitors have added.
 
 ## What is this?
 
@@ -52,6 +52,17 @@ cd frontend
 npm install
 npm run dev
 ```
+
+A fresh graph is empty, which makes the explorer and chat hard to try. Load the
+curated seed documents through the real ingestion pipeline:
+
+```bash
+cd backend && uv run python scripts/seed_graph.py
+```
+
+Seeded documents are pinned (`is_seed`), so the periodic prune leaves them
+alone and the demo never degrades to an empty graph. Re-running is idempotent —
+a document already present by sha256 is pinned rather than re-ingested.
 
 Backend tests: `cd backend && uv run pytest`
 Frontend tests: `cd frontend && npm test`
