@@ -55,3 +55,34 @@ async def test_prune_to_max_nodes_stops_if_no_documents_left_even_over_cap():
 
     assert deleted == 0
     delete_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_prune_never_asks_for_seed_documents():
+    """Seeds are permanently the oldest documents in the graph, so an
+    age-ordered prune would delete the curated demo set first."""
+    with (
+        patch.object(prune, "count_all_nodes", AsyncMock(side_effect=[4000, 2000])),
+        patch.object(
+            prune, "list_documents_by_age", AsyncMock(return_value=[{"id": "doc-1"}])
+        ) as list_mock,
+        patch.object(prune, "delete_document_cascade", AsyncMock()),
+    ):
+        await prune.prune_to_max_nodes(driver=object(), max_nodes=3000)
+
+    assert list_mock.await_args.kwargs.get("include_seed", False) is False
+
+
+@pytest.mark.asyncio
+async def test_prune_warns_when_only_seeds_remain_over_cap(caplog):
+    with (
+        patch.object(prune, "count_all_nodes", AsyncMock(return_value=5000)),
+        patch.object(prune, "list_documents_by_age", AsyncMock(return_value=[])),
+        patch.object(prune, "delete_document_cascade", AsyncMock()),
+    ):
+        with caplog.at_level("WARNING"):
+            deleted = await prune.prune_to_max_nodes(driver=object(), max_nodes=3000)
+
+    assert deleted == 0
+    # Otherwise this retries silently every 6h with nothing to show for it.
+    assert "only seed documents" in caplog.text

@@ -13,9 +13,9 @@ def new_id() -> str:
 
 
 async def wipe_graph(driver: AsyncDriver) -> None:
-    """Deletes every node and relationship — a full hard reset. There's no
-    curated seed set to reset *to* yet (that's a Day-7 item), so this leaves
-    an empty graph rather than pretending one exists."""
+    """Deletes every node and relationship — a full hard reset, seed documents
+    included. Re-seeding is a separate step (POST /api/admin/seed) rather than
+    part of this, to keep LLM calls out of a delete helper."""
 
     async def _tx(tx: AsyncManagedTransaction) -> None:
         await tx.run("MATCH (n) DETACH DELETE n")
@@ -46,15 +46,41 @@ async def get_document(driver: AsyncDriver, document_id: str) -> dict | None:
         return await session.execute_read(_tx)
 
 
-async def list_documents_by_age(driver: AsyncDriver, oldest_first: bool = True) -> list[dict]:
+async def list_documents_by_age(
+    driver: AsyncDriver, oldest_first: bool = True, include_seed: bool = False
+) -> list[dict]:
+    """Seed documents are excluded by default. They're permanently the oldest
+    in the graph, so an age-ordered prune would delete the curated demo set
+    first and leave a first-time visitor looking at an empty canvas."""
     order = "ASC" if oldest_first else "DESC"
+    where = "" if include_seed else "WHERE coalesce(d.is_seed, false) = false"
 
     async def _tx(tx: AsyncManagedTransaction) -> list[dict]:
-        result = await tx.run(f"MATCH (d:Document) RETURN d.id AS id, d.uploaded_at AS uploaded_at ORDER BY d.uploaded_at {order}")
+        result = await tx.run(
+            f"""
+            MATCH (d:Document)
+            {where}
+            RETURN d.id AS id, d.uploaded_at AS uploaded_at
+            ORDER BY d.uploaded_at {order}
+            """
+        )
         return [record.data() async for record in result]
 
     async with driver.session() as session:
         return await session.execute_read(_tx)
+
+
+async def mark_document_as_seed(driver: AsyncDriver, document_id: str) -> None:
+    """Pins an already-ingested document as part of the curated seed set.
+    Needed because process_document short-circuits on the sha256 dedup check
+    before it ever reaches write_document, so a re-run of the seed script
+    would otherwise leave the existing copy unpinned."""
+
+    async def _tx(tx: AsyncManagedTransaction) -> None:
+        await tx.run("MATCH (d:Document {id: $id}) SET d.is_seed = true", id=document_id)
+
+    async with driver.session() as session:
+        await session.execute_write(_tx)
 
 
 async def count_all_nodes(driver: AsyncDriver) -> int:
@@ -130,6 +156,7 @@ async def write_document(
     upload_ip_hash: str,
     uploaded_at: float,
     status: str,
+    is_seed: bool = False,
 ) -> None:
     async def _tx(tx: AsyncManagedTransaction) -> None:
         await tx.run(
@@ -142,7 +169,8 @@ async def write_document(
                 d.page_count = $page_count,
                 d.upload_ip_hash = $upload_ip_hash,
                 d.uploaded_at = $uploaded_at,
-                d.status = $status
+                d.status = $status,
+                d.is_seed = $is_seed
             """,
             document_id=document_id,
             filename=filename,
@@ -153,6 +181,7 @@ async def write_document(
             upload_ip_hash=upload_ip_hash,
             uploaded_at=uploaded_at,
             status=status,
+            is_seed=is_seed,
         )
 
     async with driver.session() as session:

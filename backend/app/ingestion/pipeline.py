@@ -203,6 +203,7 @@ async def process_document(
     content: bytes,
     mime_type: str,
     upload_ip_hash: str,
+    is_seed: bool = False,
 ) -> None:
     sha256 = hashlib.sha256(content).hexdigest()
 
@@ -228,6 +229,7 @@ async def process_document(
         upload_ip_hash=upload_ip_hash,
         uploaded_at=time.time(),
         status="processing",
+        is_seed=is_seed,
     )
     await set_job_status(redis, job_id, status="running", document_id=document_id, progress=5)
 

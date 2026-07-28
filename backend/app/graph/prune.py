@@ -24,6 +24,13 @@ async def prune_to_max_nodes(driver: AsyncDriver, max_nodes: int) -> int:
     while await count_all_nodes(driver) > max_nodes:
         documents = await list_documents_by_age(driver, oldest_first=True)
         if not documents:
+            # Nothing left that's eligible — the remainder is the pinned seed
+            # set. Better to sit over the cap than delete the demo content,
+            # but say so, since otherwise this retries silently every 6h.
+            logger.warning(
+                "Graph is over the %d node cap with only seed documents left; leaving it alone.",
+                max_nodes,
+            )
             break
         await delete_document_cascade(driver, documents[0]["id"])
         documents_deleted += 1
