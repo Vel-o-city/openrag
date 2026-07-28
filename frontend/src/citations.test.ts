@@ -99,6 +99,59 @@ describe('parseAnswer', () => {
     expect(order).toEqual([])
   })
 
+  // The model groups labels inside one bracket in practice, so this form has to
+// work regardless of what the prompt asks for.
+  describe('grouped labels in one bracket', () => {
+    it('splits a grouped marker into one footnote per label', () => {
+      const { segments, order } = parseAnswer('Okonkwo directs it [E1, C1].', {
+        isStreaming: false,
+        resolvable: RESOLVABLE,
+      })
+      expect(textOf(segments)).toBe('Okonkwo directs it <1><2>.')
+      expect(order).toEqual(['E1', 'C1'])
+    })
+
+    it('shares numbering with separately-bracketed labels', () => {
+      const { segments, order } = parseAnswer('One [C1] then [E1, C1] again.', {
+        isStreaming: false,
+        resolvable: RESOLVABLE,
+      })
+      // C1 keeps 1 in both spots; E1 is the only new label.
+      expect(textOf(segments)).toBe('One <1> then <2><1> again.')
+      expect(order).toEqual(['C1', 'E1'])
+    })
+
+    it('accepts semicolons and irregular spacing', () => {
+      const { segments } = parseAnswer('a [C1;E1] b [C3 , E2] c', {
+        isStreaming: false,
+        resolvable: RESOLVABLE,
+      })
+      expect(textOf(segments)).toBe('a <1><2> b <3><4> c')
+    })
+
+    it('drops only the unknown labels inside a group', () => {
+      const { segments, order } = parseAnswer('Mixed [C1, C99].', {
+        isStreaming: false,
+        resolvable: RESOLVABLE,
+      })
+      expect(textOf(segments)).toBe('Mixed <1>.')
+      expect(order).toEqual(['C1'])
+    })
+
+    it.each(['Ada [E1,', 'Ada [E1, ', 'Ada [E1, C', 'Ada [E1, C1'])(
+      'withholds the partial grouped tail %j',
+      (chunk) => {
+        const { segments } = parseAnswer(chunk, { isStreaming: true })
+        expect(textOf(segments)).toBe('Ada ')
+      },
+    )
+
+    it('renders the whole group once its closing bracket arrives', () => {
+      const { segments } = parseAnswer('Ada [E1, C1]', { isStreaming: true })
+      expect(textOf(segments)).toBe('Ada <1><2>')
+    })
+  })
+
   it('ignores bracketed text that is not a citation label', () => {
     const { segments } = parseAnswer('An aside [see below] and [C1].', {
       isStreaming: false,

@@ -35,13 +35,25 @@ export type Segment =
   | { kind: 'text'; text: string }
   | { kind: 'marker'; label: string; n: number }
 
-const MARKER = /\[([EC]\d{1,3})\]/g
+const LABEL = String.raw`[EC]\d{1,3}`
+
+// The model groups labels inside one bracket at least as often as it writes
+// them separately — "[E11, C1]" rather than "[E11][C1]". The prompt asks for
+// one label per bracket, but that's a request, not a guarantee, so parse the
+// grouped form too: a bracket holding a comma/semicolon-separated list becomes
+// one footnote per label. Missing this left the grouped form as literal prose,
+// which is the whole citation UI silently not firing.
+const MARKER = new RegExp(String.raw`\[(${LABEL}(?:\s*[,;]\s*${LABEL})*)\]`, 'g')
+const LABEL_SEPARATOR = /\s*[,;]\s*/
 
 // A marker arriving one token at a time passes through "[", "[C", "[C3" before
-// it becomes "[C3]". Rendering those intermediates flashes bracket noise into
-// the prose, so withhold a trailing partial match while streaming — the same
-// trick the backend uses to keep the ---CITATIONS--- marker from leaking.
-const PARTIAL_TAIL = /\[[EC]?\d{0,3}$/
+// it becomes "[C3]" — and a grouped one additionally through "[E11,", "[E11, C".
+// Rendering those intermediates flashes bracket noise into the prose, so
+// withhold a trailing partial match while streaming — the same trick the
+// backend uses to keep the ---CITATIONS--- marker from leaking.
+const PARTIAL_TAIL = new RegExp(
+  String.raw`\[[EC]?\d{0,3}(?:\s*[,;]\s*(?:[EC]?\d{0,3})?)*$`,
+)
 
 interface ParseOptions {
   isStreaming: boolean
@@ -65,18 +77,19 @@ export function parseAnswer(
   let cursor = 0
 
   for (const match of body.matchAll(MARKER)) {
-    const label = match[1]
     const index = match.index ?? 0
 
     if (index > cursor) {
       segments.push({ kind: 'text', text: body.slice(cursor, index) })
     }
 
-    // Once the payload has arrived, a label it doesn't know is one the model
-    // invented — the backend already dropped it, so drop the marker too
-    // rather than leaving a footnote that points nowhere.
-    const isDead = resolvable !== undefined && !resolvable.has(label)
-    if (!isDead) {
+    for (const label of match[1].split(LABEL_SEPARATOR)) {
+      // Once the payload has arrived, a label it doesn't know is one the model
+      // invented — the backend already dropped it, so drop the marker too
+      // rather than leaving a footnote that points nowhere.
+      const isDead = resolvable !== undefined && !resolvable.has(label)
+      if (isDead) continue
+
       if (!numberByLabel.has(label)) numberByLabel.set(label, numberByLabel.size + 1)
       segments.push({ kind: 'marker', label, n: numberByLabel.get(label)! })
     }

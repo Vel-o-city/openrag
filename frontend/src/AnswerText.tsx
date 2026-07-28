@@ -26,30 +26,45 @@ export function AnswerText({
 
   return (
     <>
-      {segments.map((segment, i) =>
-        segment.kind === 'text' ? (
-          <span key={i} className="whitespace-pre-wrap">
-            {segment.text}
+      {segments.map((segment, i) => {
+        if (segment.kind === 'text') {
+          return (
+            <span key={i} className="whitespace-pre-wrap">
+              {segment.text}
+            </span>
+          )
+        }
+
+        // A grouped "[E1, C1]" becomes two adjacent superscripts, which run
+        // together as "12" without a separator between them.
+        const separator = segments[i - 1]?.kind === 'marker' ? ',' : null
+
+        if (resolvable === undefined) {
+          return (
+            <sup key={i} className="text-[0.65rem] text-neutral-600">
+              {separator}
+              <span className={separator ? '' : 'ml-0.5'}>{segment.n}</span>
+            </sup>
+          )
+        }
+
+        return (
+          <span key={i} className="align-super text-[0.65rem]">
+            {separator && <span className="text-neutral-600">{separator}</span>}
+            <button
+              onClick={() => onMarkerClick(segment.label)}
+              title="Show the source this came from"
+              className={`transition-colors ${separator ? '' : 'ml-0.5'} ${
+                activeLabel === segment.label
+                  ? 'text-blue-300'
+                  : 'text-blue-400 hover:text-blue-200'
+              }`}
+            >
+              {segment.n}
+            </button>
           </span>
-        ) : resolvable === undefined ? (
-          <sup key={i} className="ml-0.5 text-[0.65rem] text-neutral-600">
-            {segment.n}
-          </sup>
-        ) : (
-          <button
-            key={i}
-            onClick={() => onMarkerClick(segment.label)}
-            title="Show the source this came from"
-            className={`ml-0.5 align-super text-[0.65rem] transition-colors ${
-              activeLabel === segment.label
-                ? 'text-blue-300'
-                : 'text-blue-400 hover:text-blue-200'
-            }`}
-          >
-            {segment.n}
-          </button>
-        ),
-      )}
+        )
+      })}
     </>
   )
 }
