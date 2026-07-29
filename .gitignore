@@ -16,6 +16,11 @@ dist-ssr/
 .env
 .env.*
 !.env.example
+# Build-time public config, not a secret: everything in it is VITE_-prefixed and
+# therefore compiled into the client bundle anyway. Tracked so that building on
+# any machine — not just one with the right local .env — targets the real
+# backend instead of baking in localhost.
+!frontend/.env.production
 
 # Editors / OS
 .DS_Store
