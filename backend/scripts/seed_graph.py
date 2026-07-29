@@ -4,7 +4,10 @@ Runs them through the real ingestion pipeline, so the entities, embeddings and
 relationships are genuine rather than hand-written fixtures — the demo graph is
 the pipeline's actual output.
 
-    uv run python scripts/seed_graph.py
+    uv run python -m scripts.seed_graph
+
+Run as a module, from the backend directory — the plain script path puts
+scripts/ on sys.path instead of the backend root, so `import app` fails.
 
 Idempotent: a document already present by sha256 is pinned rather than
 re-ingested, so re-running costs nothing.

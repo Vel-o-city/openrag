@@ -57,7 +57,7 @@ A fresh graph is empty, which makes the explorer and chat hard to try. Load the
 curated seed documents through the real ingestion pipeline:
 
 ```bash
-cd backend && uv run python scripts/seed_graph.py
+cd backend && uv run python -m scripts.seed_graph
 ```
 
 Seeded documents are pinned (`is_seed`), so the periodic prune leaves them
