@@ -57,6 +57,8 @@ def _is_model_unavailable_error(exc: Exception) -> bool:
     Any other error (bad request, invalid schema, etc.) would fail
     identically on every model and should propagate immediately instead of
     being masked by repeated retries."""
+    if isinstance(exc, errors.ServerError):
+        return exc.code in {500, 502, 503, 504}
     if not isinstance(exc, errors.ClientError):
         return False
     if exc.code == 429 or exc.status == "RESOURCE_EXHAUSTED":
@@ -70,7 +72,9 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
     response = await get_client().aio.models.embed_content(
         model=settings.embedding_model,
         contents=texts,
-        config=types.EmbedContentConfig(output_dimensionality=settings.embedding_dimensions),
+        config=types.EmbedContentConfig(
+            output_dimensionality=settings.embedding_dimensions
+        ),
     )
     return [embedding.values for embedding in response.embeddings]
 
@@ -96,12 +100,17 @@ async def extract_from_text(text: str) -> ExtractionResult:
         except Exception as exc:
             if not _is_model_unavailable_error(exc):
                 raise
-            logger.warning("Extraction model %s unavailable (quota/access), falling back to next model", model)
+            logger.warning(
+                "Extraction model %s unavailable (quota/access), falling back to next model",
+                model,
+            )
             last_exc = exc
     raise last_exc  # type: ignore[misc]
 
 
-async def extract_from_image(image_bytes: bytes, mime_type: str) -> VisionExtractionResult:
+async def extract_from_image(
+    image_bytes: bytes, mime_type: str
+) -> VisionExtractionResult:
     last_exc: Exception | None = None
     for model in settings.extraction_models:
         try:
@@ -120,30 +129,36 @@ async def extract_from_image(image_bytes: bytes, mime_type: str) -> VisionExtrac
         except Exception as exc:
             if not _is_model_unavailable_error(exc):
                 raise
-            logger.warning("Extraction model %s unavailable (quota/access), falling back to next model", model)
+            logger.warning(
+                "Extraction model %s unavailable (quota/access), falling back to next model",
+                model,
+            )
             last_exc = exc
     raise last_exc  # type: ignore[misc]
 
 
-async def chat_stream(system_prompt: str, user_message: str):
+async def chat_stream(
+    system_prompt: str, user_message: str, *, allow_restart: bool = False
+):
     """Yields text deltas from a tool-less, read-only chat completion. No
     browsing/code-exec is ever wired up here — even a successful prompt
     injection has nothing dangerous to do.
 
-    Falls back to the next configured model if it's exhausted or
-    unavailable, but only if nothing has been yielded yet for this request —
-    once tokens have reached the client there's no clean way to restart the
-    answer from a different model mid-stream, so a failure past that point
-    just propagates to the caller's own error handling instead.
+    Falls back on quota/access/provider overload errors. Callers opting into
+    restart support receive None before fallback after partial output and
+    must discard the old answer, not concatenate two different generations.
     """
     last_exc: Exception | None = None
-    for model in settings.chat_models:
+    for index, model in enumerate(settings.chat_models):
         yielded_any = False
         try:
             stream = await get_client().aio.models.generate_content_stream(
                 model=model,
                 contents=user_message,
-                config=types.GenerateContentConfig(system_instruction=system_prompt),
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    max_output_tokens=settings.max_estimated_chat_output_tokens,
+                ),
             )
             async for chunk in stream:
                 if chunk.text:
@@ -151,8 +166,15 @@ async def chat_stream(system_prompt: str, user_message: str):
                     yield chunk.text
             return
         except Exception as exc:
-            if yielded_any or not _is_model_unavailable_error(exc):
+            if not _is_model_unavailable_error(exc):
                 raise
-            logger.warning("Chat model %s unavailable (quota/access), falling back to next model", model)
+            if yielded_any:
+                if not allow_restart or index == len(settings.chat_models) - 1:
+                    raise
+                yield None
+            logger.warning(
+                "Chat model %s unavailable (quota/access), falling back to next model",
+                model,
+            )
             last_exc = exc
     raise last_exc  # type: ignore[misc]

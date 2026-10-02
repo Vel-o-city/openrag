@@ -1,235 +1,283 @@
 import { useEffect, useRef, useState } from 'react'
 import { API_BASE } from './apiBase'
-import { useGraph } from './GraphContext'
 import { rememberOwnDocument } from './ownDocuments'
 import { TurnstileWidget } from './TurnstileWidget'
 
-const POLL_INTERVAL_MS = 1500
-const MAX_POLL_ATTEMPTS = 80 // ~2 minutes
+import { stageFromJobStatus, type Stage } from './uploadStatus'
 
-type Stage = 'idle' | 'uploading' | 'extracting' | 'linking' | 'done' | 'partial' | 'failed' | 'throttled'
-
-const STAGE_LABELS: Record<Stage, string> = {
-  idle: '',
-  uploading: 'Uploading…',
-  extracting: 'Extracting…',
-  linking: 'Linking into the graph…',
-  done: 'Done — new nodes are live in the graph.',
-  partial: 'Mostly done — a few pages needed extra care.',
-  failed: 'Something went wrong processing that file.',
-  throttled: "You've hit the upload limit.",
+const JOB_KEY = 'openrag:pending-upload'
+interface PendingJob {
+  job_id: string
+  filename: string
+  at: number
 }
-
-export function stageFromJobStatus(status: string, progress: number): Stage {
-  if (status === 'done') return 'done'
-  if (status === 'partial') return 'partial'
-  if (status === 'failed') return 'failed'
-  return progress >= 50 ? 'linking' : 'extracting'
+function saveJob(job: PendingJob | null) {
+  try {
+    if (job) localStorage.setItem(JOB_KEY, JSON.stringify(job))
+    else localStorage.removeItem(JOB_KEY)
+  } catch {
+    /* Storage may be unavailable. */
+  }
 }
-
-export function UploadPanel() {
-  const [expanded, setExpanded] = useState(false)
+function pendingJob(): PendingJob | null {
+  try {
+    const job = JSON.parse(localStorage.getItem(JOB_KEY) ?? 'null')
+    return typeof job?.job_id === 'string' &&
+      typeof job?.filename === 'string' &&
+      Date.now() - job.at < 86400000
+      ? job
+      : null
+  } catch {
+    return null
+  }
+}
+function delay(signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const stop = () => {
+      clearTimeout(timer)
+      reject(new DOMException('Cancelled', 'AbortError'))
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', stop)
+      resolve()
+    }, 1500)
+    signal.addEventListener('abort', stop, { once: true })
+  })
+}
+export function UploadPanel({
+  onComplete,
+}: {
+  onComplete: (id: string) => Promise<void>
+}) {
   const [stage, setStage] = useState<Stage>('idle')
-  const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const [retryAfter, setRetryAfter] = useState<number | null>(null)
-  const [turnstileToken, setTurnstileToken] = useState<string | null>(null)
+  const [progress, setProgress] = useState(0)
+  const [filename, setFilename] = useState('')
+  const [error, setError] = useState('')
+  const [token, setToken] = useState<string | null>(null)
   const [widgetKey, setWidgetKey] = useState(0)
-  const [isDragging, setIsDragging] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const cancelledRef = useRef(false)
-  const { refreshGraph } = useGraph()
+  const [dragging, setDragging] = useState(false)
+  const input = useRef<HTMLInputElement>(null)
+  const controller = useRef<AbortController | null>(null)
+  const completeRef = useRef(onComplete)
+  completeRef.current = onComplete
+  const busyRef = useRef(false)
+  const requiresVerification = !!import.meta.env.VITE_TURNSTILE_SITE_KEY
+  const busy = ['uploading', 'extracting', 'linking'].includes(stage)
 
-  useEffect(() => {
-    if (retryAfter === null) return undefined
-    if (retryAfter <= 0) {
-      setRetryAfter(null)
-      return undefined
-    }
-    const timeout = setTimeout(() => setRetryAfter((seconds) => (seconds ?? 1) - 1), 1000)
-    return () => clearTimeout(timeout)
-  }, [retryAfter])
-
-  function reset() {
-    cancelledRef.current = true
-    setStage('idle')
-    setErrorMessage(null)
-    setTurnstileToken(null)
-    setWidgetKey((key) => key + 1)
-  }
-
-  async function pollJob(jobId: string, attempt = 0) {
-    if (cancelledRef.current) return
-
-    if (attempt >= MAX_POLL_ATTEMPTS) {
-      setStage('failed')
-      setErrorMessage('Timed out waiting for processing to finish.')
-      return
-    }
-
-    const response = await fetch(`${API_BASE}/api/jobs/${jobId}`)
-    if (cancelledRef.current) return
-    if (!response.ok) {
-      setStage('failed')
-      setErrorMessage('Lost track of that upload — please try again.')
-      return
-    }
-
-    const job = await response.json()
-    const nextStage = stageFromJobStatus(job.status, job.progress ?? 0)
-    setStage(nextStage)
-
-    if (job.status === 'done' || job.status === 'partial') {
-      await refreshGraph()
-      setTimeout(reset, 3000)
-      return
-    }
-    if (job.status === 'failed') {
-      setErrorMessage(job.error ?? null)
-      return
-    }
-
-    setTimeout(() => pollJob(jobId, attempt + 1), POLL_INTERVAL_MS)
-  }
-
-  async function uploadFile(file: File) {
-    cancelledRef.current = false
-    setStage('uploading')
-    setErrorMessage(null)
-
-    const formData = new FormData()
-    formData.append('file', file)
-    if (turnstileToken) formData.append('turnstile_token', turnstileToken)
-
-    try {
-      const response = await fetch(`${API_BASE}/api/documents`, { method: 'POST', body: formData })
-
-      if (response.status === 429) {
-        const retryAfterHeader = response.headers.get('Retry-After')
-        setStage('throttled')
-        setRetryAfter(retryAfterHeader ? Number.parseInt(retryAfterHeader, 10) : 60)
-        return
+  async function poll(job: PendingJob, abort: AbortController) {
+    let failures = 0
+    let expired = false
+    for (let attempt = 0; attempt < 400; attempt++) {
+      await delay(abort.signal)
+      try {
+        const response = await fetch(
+          `${API_BASE}/api/jobs/${encodeURIComponent(job.job_id)}`,
+          { signal: abort.signal },
+        )
+        if (response.status === 404) {
+          expired = true
+          saveJob(null)
+          throw new Error(
+            'This upload session expired. Please upload the file again.',
+          )
+        }
+        if (!response.ok) throw new Error('Waiting to reconnect to the upload…')
+        const result = await response.json()
+        failures = 0
+        setError('')
+        setProgress(result.progress ?? 0)
+        setStage(stageFromJobStatus(result.status, result.progress ?? 0))
+        if (['done', 'partial'].includes(result.status)) {
+          if (!result.document_id)
+            throw new Error('The processed document could not be found.')
+          rememberOwnDocument(result.document_id)
+          saveJob(null)
+          await completeRef.current(result.document_id)
+          return
+        }
+        if (result.status === 'failed') {
+          saveJob(null)
+          setError(
+            result.error || 'Could not read this file. Try a clearer document.',
+          )
+          return
+        }
+      } catch (err) {
+        if (abort.signal.aborted) throw err
+        failures++
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'Waiting to reconnect to the upload…',
+        )
+        if (failures >= 20 || expired) throw err
       }
-      if (!response.ok) {
-        const body = await response.json().catch(() => null)
-        setStage('failed')
-        setErrorMessage(body?.detail ?? `Upload failed (${response.status}).`)
-        return
-      }
-
-      const { job_id: jobId, document_id: documentId } = await response.json()
-      // Remember it now, not on completion — the panel self-resets after a
-      // few seconds and the id would be gone.
-      rememberOwnDocument(documentId)
-      setStage('extracting')
-      setTimeout(() => pollJob(jobId), POLL_INTERVAL_MS)
-    } catch {
-      setStage('failed')
-      setErrorMessage('Could not reach the server — please try again.')
     }
-  }
-
-  function handleFile(file: File | undefined) {
-    if (!file || stage === 'uploading' || stage === 'extracting' || stage === 'linking') return
-    if (!turnstileToken) {
-      setErrorMessage('Please complete the verification widget first.')
-      return
-    }
-    uploadFile(file)
-  }
-
-  const isBusy = stage === 'uploading' || stage === 'extracting' || stage === 'linking'
-  const isTerminal = stage === 'done' || stage === 'partial' || stage === 'failed' || stage === 'throttled'
-
-  if (!expanded) {
-    return (
-      <button
-        onClick={() => setExpanded(true)}
-        className="absolute bottom-4 left-4 rounded-full border border-neutral-700 bg-neutral-900/90 px-4 py-2 text-sm font-medium text-neutral-100 shadow-lg hover:border-neutral-500"
-      >
-        + Upload a document
-      </button>
+    throw new Error(
+      'Processing is taking longer than expected. Refresh to reconnect; your upload may still finish.',
     )
   }
-
+  useEffect(() => {
+    const job = pendingJob()
+    if (job) {
+      const abort = new AbortController()
+      controller.current = abort
+      busyRef.current = true
+      setFilename(job.filename)
+      setStage('extracting')
+      void poll(job, abort)
+        .catch((err) => {
+          if (!abort.signal.aborted) {
+            setStage('failed')
+            setError(
+              err instanceof Error ? err.message : 'Could not reconnect.',
+            )
+          }
+        })
+        .finally(() => {
+          if (controller.current === abort) busyRef.current = false
+        })
+    }
+    return () => controller.current?.abort()
+  }, [])
+  async function handleFile(file?: File) {
+    if (!file || busyRef.current) return
+    if (!/\.(pdf|png|jpe?g|webp)$/i.test(file.name)) {
+      setError('Choose a PDF, PNG, JPG, or WebP file.')
+      return
+    }
+    if (!file.size || file.size > 20 * 1024 * 1024) {
+      setError('Choose a non-empty file up to 20 MB.')
+      return
+    }
+    if (requiresVerification && !token) {
+      setError('Complete the verification below before uploading.')
+      return
+    }
+    controller.current?.abort()
+    const abort = new AbortController()
+    controller.current = abort
+    busyRef.current = true
+    setFilename(file.name)
+    setStage('uploading')
+    setProgress(0)
+    setError('')
+    const form = new FormData()
+    form.append('file', file)
+    if (token) form.append('turnstile_token', token)
+    try {
+      const response = await fetch(`${API_BASE}/api/documents`, {
+        method: 'POST',
+        body: form,
+        signal: abort.signal,
+      })
+      if (response.status === 429)
+        throw new Error(
+          'The demo upload limit has been reached. Please try again later.',
+        )
+      if (!response.ok) {
+        const body = await response.json().catch(() => null)
+        throw new Error(
+          typeof body?.detail === 'string'
+            ? body.detail
+            : 'Could not upload the file. Please try again.',
+        )
+      }
+      const result = await response.json()
+      const job = {
+        job_id: result.job_id,
+        filename: file.name,
+        at: Date.now(),
+      }
+      saveJob(job)
+      setStage('extracting')
+      await poll(job, abort)
+    } catch (err) {
+      if (!abort.signal.aborted) {
+        setStage('failed')
+        setError(
+          err instanceof Error
+            ? err.message
+            : 'Could not reach the server. Please try again.',
+        )
+      }
+    } finally {
+      if (controller.current === abort) busyRef.current = false
+      setToken(null)
+      setWidgetKey((key) => key + 1)
+      if (input.current) input.current.value = ''
+    }
+  }
   return (
-    <div className="absolute bottom-4 left-4 w-80 rounded-lg border border-neutral-800 bg-neutral-900/95 p-4 text-neutral-100 shadow-xl">
-      <div className="flex items-start justify-between">
-        <h3 className="text-sm font-semibold">Add to the shared graph</h3>
-        <button
-          className="text-neutral-500 hover:text-neutral-300"
-          onClick={() => {
-            setExpanded(false)
-            reset()
-          }}
-        >
-          ✕
-        </button>
-      </div>
-
-      <p className="mt-1 text-xs text-neutral-500">
-        PDFs and images become part of this public, shared knowledge graph — don't upload anything sensitive.
+    <div
+      className="upload-panel"
+      onDragOver={(e) => {
+        e.preventDefault()
+        setDragging(true)
+      }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => {
+        e.preventDefault()
+        setDragging(false)
+        void handleFile(e.dataTransfer.files[0])
+      }}
+    >
+      <button
+        className={`upload-button ${dragging ? 'upload-dragging' : ''}`}
+        disabled={busy}
+        onClick={() => input.current?.click()}
+      >
+        <span>＋</span>
+        {busy ? 'Processing document…' : 'Upload a document'}
+        <span>↑</span>
+      </button>
+      <input
+        aria-label="Upload document file"
+        ref={input}
+        type="file"
+        accept=".pdf,.png,.jpg,.jpeg,.webp"
+        hidden
+        onChange={(e) => void handleFile(e.target.files?.[0])}
+      />
+      <p className="upload-hint">
+        PDF, PNG, JPG, WebP · 20 MB · 20 pages
+        <br />
+        Drop a file here to upload
       </p>
-
-      {!isBusy && !isTerminal && (
-        <>
-          <div className="mt-3">
-            <TurnstileWidget key={widgetKey} onVerify={setTurnstileToken} onExpire={() => setTurnstileToken(null)} />
-          </div>
-
-          <div
-            onDragOver={(event) => {
-              event.preventDefault()
-              setIsDragging(true)
-            }}
-            onDragLeave={() => setIsDragging(false)}
-            onDrop={(event) => {
-              event.preventDefault()
-              setIsDragging(false)
-              handleFile(event.dataTransfer.files[0])
-            }}
-            onClick={() => fileInputRef.current?.click()}
-            className={`mt-3 flex h-24 cursor-pointer items-center justify-center rounded-md border-2 border-dashed text-center text-xs transition-colors ${
-              isDragging
-                ? 'border-blue-400 bg-blue-500/10 text-blue-200'
-                : 'border-neutral-700 text-neutral-500 hover:border-neutral-600'
-            }`}
-          >
-            Drag a PDF or image here, or click to browse
-          </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".pdf,.png,.jpg,.jpeg,.webp"
-            className="hidden"
-            onChange={(event) => handleFile(event.target.files?.[0])}
-          />
-        </>
+      {requiresVerification && !busy && (
+        <TurnstileWidget
+          key={widgetKey}
+          onVerify={setToken}
+          onExpire={() => setToken(null)}
+        />
       )}
-
-      {(isBusy || isTerminal) && (
-        <div className="mt-3">
-          <p
-            className={
-              stage === 'failed' || stage === 'throttled' ? 'text-sm text-red-400' : 'text-sm text-neutral-200'
-            }
-          >
-            {STAGE_LABELS[stage]}
-          </p>
-          {isBusy && (
-            <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-neutral-800">
-              <div className="h-full w-1/2 animate-pulse rounded-full bg-blue-500" />
-            </div>
-          )}
-          {errorMessage && <p className="mt-1 text-xs text-neutral-500">{errorMessage}</p>}
-          {stage === 'throttled' && retryAfter !== null && (
-            <p className="mt-1 text-xs text-neutral-500">Try again in {retryAfter}s — feel free to explore or chat meanwhile.</p>
-          )}
-          {isTerminal && (
-            <button onClick={reset} className="mt-2 text-xs text-neutral-400 underline hover:text-neutral-200">
-              Upload another
-            </button>
+      {stage !== 'idle' && (
+        <div className={`upload-status upload-${stage}`} role="status">
+          <strong>
+            {stage === 'done'
+              ? 'Ready to ask questions'
+              : stage === 'partial'
+                ? 'Ready · some pages could not be read'
+                : stage === 'failed'
+                  ? 'Upload needs attention'
+                  : stage === 'uploading'
+                    ? 'Uploading…'
+                    : `Reading and indexing · ${progress}%`}
+          </strong>
+          <span title={filename}>{filename}</span>
+          {busy && (
+            <progress
+              aria-label="Document processing progress"
+              max={100}
+              value={progress}
+            />
           )}
         </div>
+      )}
+      {error && (
+        <p className="upload-error" role="alert">
+          {error}
+        </p>
       )}
     </div>
   )

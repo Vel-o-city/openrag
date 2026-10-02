@@ -41,7 +41,9 @@ export function TurnstileWidget({ onVerify, onExpire }: TurnstileWidgetProps) {
         sitekey: SITE_KEY,
         callback: (token: string) => onVerifyRef.current(token),
         'expired-callback': () => onExpireRef.current?.(),
-        theme: 'dark',
+        theme: 'light',
+        size: 'compact',
+        appearance: 'interaction-only',
       })
     }
 

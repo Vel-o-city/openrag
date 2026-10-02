@@ -1,9 +1,18 @@
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from redis.asyncio import Redis
 
 from app.config import settings
+from app.chat.citations import sanitize_source_text
 from app.deps import get_redis
 from app.graph.neo4j_client import get_driver
 from app.graph import writer as graph_writer
@@ -41,9 +50,15 @@ async def _run_pipeline(
             mime_type=mime_type,
             upload_ip_hash=upload_ip_hash,
         )
-    except Exception as exc:
+    except Exception:
         logger.exception("Ingestion pipeline failed for document %s", document_id)
-        await set_job_status(redis, job_id, status="failed", error=str(exc))
+        await graph_writer.set_document_status(get_driver(), document_id, "failed")
+        await set_job_status(
+            redis,
+            job_id,
+            status="failed",
+            error="Processing failed. Please retry the upload.",
+        )
 
 
 @router.post("")
@@ -56,9 +71,11 @@ async def upload_document(
 ) -> dict:
     client_host = request.client.host if request.client else None
     if not await verify_turnstile_token(turnstile_token, client_host):
-        raise HTTPException(status_code=403, detail="Turnstile verification failed. Please try again.")
+        raise HTTPException(
+            status_code=403, detail="Turnstile verification failed. Please try again."
+        )
 
-    content = await file.read()
+    content = await file.read(settings.max_upload_mb * 1024 * 1024 + 1)
 
     try:
         mime_type = validate_upload(content)
@@ -95,12 +112,69 @@ async def upload_document(
     }
 
 
+PUBLIC_FIELDS = (
+    "id",
+    "filename",
+    "mime_type",
+    "source_type",
+    "page_count",
+    "uploaded_at",
+    "status",
+    "is_seed",
+)
+
+
+@router.get("")
+async def list_documents(
+    document_ids: list[str] = Query(default=[], max_length=20)
+) -> list[dict]:
+    # The demo is public, but its library shows only curated samples and the
+    # IDs this browser remembers, rather than advertising strangers' uploads.
+    async with get_driver().session() as session:
+        result = await session.run(
+            """
+            MATCH (d:Document)
+            WHERE coalesce(d.is_seed, false) OR d.id IN $ids
+            OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c:Chunk)
+            WITH d, count(c) AS chunk_count
+            RETURN d { .id, .filename, .mime_type, .source_type, .page_count,
+                       .uploaded_at, .status, .is_seed, chunk_count: chunk_count } AS document
+            ORDER BY d.is_seed DESC, d.uploaded_at DESC
+            LIMIT 23
+            """,
+            ids=document_ids,
+        )
+        return [dict(record["document"]) async for record in result]
+
+
+@router.get("/{document_id}/chunks/{chunk_id}")
+async def get_passage(document_id: str, chunk_id: str) -> dict:
+    async with get_driver().session() as session:
+        result = await session.run(
+            """
+            MATCH (d:Document {id: $document_id})-[:HAS_CHUNK]->(c:Chunk {id: $chunk_id})
+            RETURN c.id AS id, c.text AS text, c.page_number AS page_number,
+                   d.id AS document_id, d.filename AS filename
+            """,
+            document_id=document_id,
+            chunk_id=chunk_id,
+        )
+        record = await result.single()
+    if record is None:
+        raise HTTPException(
+            status_code=404, detail="Source passage is no longer available."
+        )
+    passage = record.data()
+    passage["text"] = sanitize_source_text(passage["text"])
+    return passage
+
+
 @router.get("/{document_id}")
 async def get_document(document_id: str) -> dict:
     document = await graph_writer.get_document(get_driver(), document_id)
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found.")
-    return document
+    return {key: document.get(key) for key in PUBLIC_FIELDS}
 
 
 jobs_router = APIRouter(prefix="/api/jobs", tags=["jobs"])

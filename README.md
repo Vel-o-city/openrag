@@ -1,74 +1,85 @@
 # OpenRAG
 
-**A live, public knowledge graph you can see, extend, and chat with — grounded, cited answers instead of black-box RAG.**
+**Upload a document. Ask a question. Check the source.**
 
-> **[Try the live demo](https://openrag.sanket.website)** — the graph explorer, upload flow, and cited chat are all live. A few documents are pinned as a starting point so the graph is never empty; everything else is what visitors have added.
+[Live demo](https://openrag.sanket.website) · [Source code](https://github.com/Vel-o-city/openrag)
 
-## What is this?
+OpenRAG is a document Q&A portfolio demo. Visitors can try three fictional sample PDFs or upload a PDF/image of their own. Answers stream into the chat with numbered citations. Clicking a citation opens the extracted passage, filename, and page number so the reader can check the evidence.
 
-Most RAG chatbots are a black box: you ask a question, something gets retrieved behind the scenes, and you get an answer with no way to see what it actually knew or where the answer came from.
+## What works
 
-OpenRAG flips that around. Upload a PDF or image and watch it turn into an explorable knowledge graph — entities and relationships extracted live, rendered as a real graph you can pan, zoom, and click through. Ask the chatbot a question and watch the *exact* nodes it used to answer light up on the graph in real time, with citations back to the source document and page.
+- Native-text PDFs, scanned PDFs, PNG, JPEG, and WebP; up to 20 MB and 20 pages.
+- Upload progress, partial-page reporting, transient connection retries, and reconnection after a page refresh.
+- A document library with selected sources. A finished upload becomes the active source automatically.
+- Retrieval restricted to those selected files; no shared entity summaries can import facts from another document.
+- Follow-up conversation context, streamed answers, stop/retry controls, and explicit interruption errors.
+- Clickable inline citations and source cards with full extracted passages on demand.
+- Responsive document drawer and source inspector. No graph visualization in the interface.
 
-It's a single shared, public instance — anyone who visits can add to the same graph everyone else sees.
+## Architecture
 
-## Tech stack
+React/TypeScript/Vite → FastAPI → Gemini embeddings and streamed generation → Neo4j document/chunk storage. Redis stores ingestion jobs and cost reservations. PDF text comes from `pypdf`; scanned pages are rendered with `pypdfium2` and transcribed by Gemini vision.
 
-- **Backend:** Python, FastAPI, async SSE streaming
-- **Graph + vectors:** Neo4j (native vector index — one database for both graph traversal and similarity search)
-- **LLM:** Google Gemini (extraction, embeddings, chat)
-- **Frontend:** React, Vite, TypeScript, Tailwind, `react-force-graph`
-- **Hosting:** Neo4j AuraDB Free, Upstash Redis, Render, Cloudflare Pages — fully managed, $0/month
+Selected-document retrieval ranks embedded chunks **inside the selected documents**, rather than retrieving global matches and filtering afterwards. Source labels are assigned by the backend and resolved against real chunk IDs. Unknown labels are discarded. If the model omits usable citations, the UI labels returned passages as related passages rather than precise citations. Citations identify evidence; they do not guarantee that every claim is correct.
 
-## Design decisions / trade-offs
+Native text is indexed without requiring graph extraction. Optional legacy graph enrichment (`ENABLE_GRAPH_ENRICHMENT=true`) and graph/admin APIs remain available behind the scenes, but document chat uses source passages only.
 
-- Chose Neo4j's native vector index over a separate vector DB (ChromaDB/Milvus) — one database serves both graph traversal and similarity search, simpler architecture for a solo-maintained project.
-- Chose `pypdf`/`pypdfium2` over PyMuPDF for PDF parsing — PyMuPDF is AGPL-3.0, which risks forcing this whole repo under AGPL once publicly deployed.
-- Chose fully-managed free-tier hosting (AuraDB Free, Render free tier) over a self-hosted VM — every self-hosted option requires a credit card at signup; this doesn't. Comes with two known, monitored trade-offs (see `.github/workflows/`): Render's free tier spins down after 15 min idle, and AuraDB Free auto-pauses after 72h idle. Both are mitigated with scheduled keep-alive pings plus uptime monitoring.
-- Uploads are fully open, no login required — maximizes the "try it right now" effect, but means the ingestion path has real abuse/cost/prompt-injection safeguards built in from day one, not bolted on later.
-
-## Known limitations
-
-- No authentication — this is a single shared public demo instance, not multi-tenant.
-- Moderation is a manual "flag this node" button plus periodic resets, not automated content scanning.
-- Rate limiting is IP-based, so visitors behind a shared NAT (office, university) are jointly throttled.
-- Hosted entirely on free tiers — see the trade-offs above.
+The deployed stack uses Cloudflare Pages, Render, Neo4j AuraDB, and Upstash Redis. Render may take time to wake after inactivity. The library shows a visible connection error and retry action in that case.
 
 ## Local development
 
-Requires Docker, Node ≥18, and [uv](https://docs.astral.sh/uv/).
+Requires Docker, Python 3.12+, [uv](https://docs.astral.sh/uv/), and Node 22.13+ (Node 24 recommended).
 
 ```bash
-# Local Neo4j + Redis
-docker compose up -d
+docker compose up -d --wait
 
-# Backend
 cd backend
-cp .env.example .env   # defaults already match docker-compose, no edits needed
+cp .env.example .env
+# Set GEMINI_API_KEY in .env. Keep database URLs local for local development.
+uv sync
 uv run uvicorn app.main:app --reload
-
-# Frontend (separate terminal)
-cd frontend
-npm install
-npm run dev
 ```
 
-A fresh graph is empty, which makes the explorer and chat hard to try. Load the
-curated seed documents through the real ingestion pipeline:
+In another terminal:
 
 ```bash
-cd backend && uv run python -m scripts.seed_graph
+cd frontend
+npm ci
+VITE_API_BASE_URL=http://localhost:8000 npm run dev
 ```
 
-Seeded documents are pinned (`is_seed`), so the periodic prune leaves them
-alone and the demo never degrades to an empty graph. Re-running is idempotent —
-a document already present by sha256 is pinned rather than re-ingested.
+Load the fictional demo PDFs through the real ingestion pipeline:
 
-Backend tests: `cd backend && uv run pytest`
-Frontend tests: `cd frontend && npm test`
+```bash
+cd backend
+uv run python -m scripts.seed_graph
+```
 
-## License
+The sample PDFs and their Markdown sources are in `backend/scripts/seed_documents/`. Seeds are pinned against automatic pruning. The library starts with those samples selected; changing sources starts a new chat.
+
+For an isolated stack alongside other projects:
+
+```bash
+NEO4J_HTTP_PORT=17474 NEO4J_BOLT_PORT=17687 REDIS_PORT=16380 docker compose -p openrag-demo up -d --wait
+```
+
+Set backend `NEO4J_URI=bolt://localhost:17687` and `REDIS_URL=redis://localhost:16380/0`. If the backend port changes, update `VITE_API_BASE_URL` accordingly. Allow the frontend origin in `CORS_ORIGINS` (JSON array syntax). Production builds use `frontend/.env.production`; never put localhost in that file.
+
+Turnstile is optional locally: leave both `TURNSTILE_SECRET_KEY` and `VITE_TURNSTILE_SITE_KEY` empty. Production uploads need matching backend/frontend Turnstile configuration. Set a strong `ADMIN_TOKEN` before deploying.
+
+## Validation
+
+```bash
+cd backend && uv run pytest
+cd frontend && npm test
+cd frontend && npm run build
+cd frontend && npm run lint
+```
+
+Tests cover document scope, history, citation resolution, stream interruptions, upload reconnection, duplicate document IDs, metadata filtering, and unreadable uploads, alongside the existing backend and frontend checks.
+
+## Demo boundaries
+
+This is a public instance without authentication or tenant isolation. A browser remembers its own uploaded document IDs, but this is a convenience, not an access-control boundary. Do not upload confidential files. Original binary uploads are processed in memory; the source inspector displays indexed text, not a stored PDF viewer. Non-seed documents can be pruned as the database fills up. Limits are IP-based and Gemini availability/quota can interrupt requests.
 
 MIT — see [LICENSE](LICENSE).
-
-This is a personal portfolio project, provided as-is with no warranty or uptime guarantee. Content is public and user-submitted; don't upload private, confidential, or sensitive documents. If something here is inappropriate or infringes your rights, open an issue and it'll be removed.

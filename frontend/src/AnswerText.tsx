@@ -31,7 +31,7 @@ export function AnswerText({
     return inlines.map((inline, i) => {
       if (inline.kind === 'text') {
         return inline.bold ? (
-          <strong key={i} className="font-semibold text-neutral-100">
+          <strong key={i} className="font-semibold text-inherit">
             {inline.text}
           </strong>
         ) : (
@@ -57,11 +57,12 @@ export function AnswerText({
           {separator && <span className="text-neutral-600">{separator}</span>}
           <button
             onClick={() => onMarkerClick(inline.label)}
-            title="Show the source this came from"
+            title={`Open source ${inline.n}`}
+            aria-label={`Citation ${inline.n}`}
             className={`transition-colors ${separator ? '' : 'ml-0.5'} ${
               activeLabel === inline.label
-                ? 'text-blue-300'
-                : 'text-blue-400 hover:text-blue-200'
+                ? 'text-violet-800'
+                : 'text-violet-700 hover:text-violet-900'
             }`}
           >
             {inline.n}
@@ -76,7 +77,8 @@ export function AnswerText({
   const groups: Block[][] = []
   for (const block of blocks) {
     const previous = groups[groups.length - 1]
-    if (block.kind === 'bullet' && previous?.[0]?.kind === 'bullet') previous.push(block)
+    if (block.kind === 'bullet' && previous?.[0]?.kind === 'bullet')
+      previous.push(block)
     else groups.push([block])
   }
 
@@ -101,7 +103,7 @@ export function AnswerText({
         const block = group[0]
         if (block.kind === 'heading') {
           return (
-            <p key={i} className="font-semibold text-neutral-100">
+            <p key={i} className="font-semibold text-inherit">
               {renderInlines(block.inlines)}
             </p>
           )

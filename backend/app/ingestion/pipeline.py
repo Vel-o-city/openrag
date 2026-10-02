@@ -18,7 +18,12 @@ from neo4j import AsyncDriver
 from redis.asyncio import Redis
 
 from app.config import settings
-from app.gemini.client import embed_text, embed_texts, extract_from_image, extract_from_text
+from app.gemini.client import (
+    embed_text,
+    embed_texts,
+    extract_from_image,
+    extract_from_text,
+)
 from app.graph.writer import (
     find_document_by_sha256,
     resolve_or_create_entity,
@@ -55,7 +60,9 @@ async def _with_one_retry(call: Callable[[], Awaitable[T]]) -> T | None:
             if result is not None:
                 return result
         except Exception:
-            logger.warning("Extraction call failed (attempt %d/2)", attempt + 1, exc_info=True)
+            logger.warning(
+                "Extraction call failed (attempt %d/2)", attempt + 1, exc_info=True
+            )
     return None
 
 
@@ -81,10 +88,12 @@ async def _write_extraction(
         embedding=embedding,
     )
 
-    if not extraction.entities:
+    if not settings.enable_graph_enrichment or not extraction.entities:
         return
 
-    entity_embeddings = await embed_texts([entity.name for entity in extraction.entities])
+    entity_embeddings = await embed_texts(
+        [entity.name for entity in extraction.entities]
+    )
 
     name_to_id: dict[str, str] = {}
     for entity, entity_embedding in zip(extraction.entities, entity_embeddings):
@@ -122,7 +131,13 @@ async def _write_extraction(
 
 
 async def _process_native_page(
-    driver: AsyncDriver, redis: Redis, ip_hash: str, *, document_id: str, page_number: int, text: str
+    driver: AsyncDriver,
+    redis: Redis,
+    ip_hash: str,
+    *,
+    document_id: str,
+    page_number: int,
+    text: str,
 ) -> bool:
     """Returns True if every chunk on this page extracted cleanly."""
     all_ok = True
@@ -131,12 +146,11 @@ async def _process_native_page(
             estimate_tokens(chunk), settings.max_estimated_extraction_output_tokens
         )
         if not await reserve_budget(redis, ip_hash, estimated_cost):
-            logger.warning("Extraction skipped for page %d chunk %d: daily budget exceeded", page_number, chunk_index)
-            all_ok = False
-            continue
-
-        extraction = await _with_one_retry(lambda c=chunk: extract_from_text(c))
-        if extraction is None:
+            logger.warning(
+                "Extraction skipped for page %d chunk %d: daily budget exceeded",
+                page_number,
+                chunk_index,
+            )
             all_ok = False
             continue
 
@@ -144,6 +158,13 @@ async def _process_native_page(
         if embedding is None:
             all_ok = False
             continue
+
+        extraction = ExtractionResult()
+        if settings.enable_graph_enrichment:
+            extraction = (
+                await _with_one_retry(lambda c=chunk: extract_from_text(c))
+                or extraction
+            )
 
         await _write_extraction(
             driver,
@@ -159,15 +180,25 @@ async def _process_native_page(
 
 
 async def _process_vision_page(
-    driver: AsyncDriver, redis: Redis, ip_hash: str, *, document_id: str, page_number: int, image_bytes: bytes, image_mime: str
+    driver: AsyncDriver,
+    redis: Redis,
+    ip_hash: str,
+    *,
+    document_id: str,
+    page_number: int,
+    image_bytes: bytes,
+    image_mime: str,
 ) -> bool:
     """Scanned/image pages are treated as one chunk each, reusing the single
     combined vision call's transcription + entities/relationships."""
     estimated_cost = estimate_cost_usd(
-        settings.estimated_vision_input_tokens, settings.max_estimated_extraction_output_tokens
+        settings.estimated_vision_input_tokens,
+        settings.max_estimated_extraction_output_tokens,
     )
     if not await reserve_budget(redis, ip_hash, estimated_cost):
-        logger.warning("Vision extraction skipped for page %d: daily budget exceeded", page_number)
+        logger.warning(
+            "Vision extraction skipped for page %d: daily budget exceeded", page_number
+        )
         return False
 
     extraction: VisionExtractionResult | None = await _with_one_retry(
@@ -176,21 +207,23 @@ async def _process_vision_page(
     if extraction is None or not extraction.transcribed_text.strip():
         return False
 
-    embedding = await _with_one_retry(lambda: embed_text(extraction.transcribed_text))
-    if embedding is None:
-        return False
-
-    await _write_extraction(
-        driver,
-        document_id=document_id,
-        chunk_id=str(uuid.uuid4()),
-        text=extraction.transcribed_text,
-        page_number=page_number,
-        chunk_index=0,
-        embedding=embedding,
-        extraction=extraction,
-    )
-    return True
+    all_ok = True
+    for index, text in enumerate(chunk_text(extraction.transcribed_text)):
+        embedding = await _with_one_retry(lambda t=text: embed_text(t))
+        if embedding is None:
+            all_ok = False
+            continue
+        await _write_extraction(
+            driver,
+            document_id=document_id,
+            chunk_id=str(uuid.uuid4()),
+            text=text,
+            page_number=page_number,
+            chunk_index=index,
+            embedding=embedding,
+            extraction=extraction if index == 0 else ExtractionResult(),
+        )
+    return all_ok
 
 
 async def process_document(
@@ -208,7 +241,7 @@ async def process_document(
     sha256 = hashlib.sha256(content).hexdigest()
 
     existing = await find_document_by_sha256(driver, sha256)
-    if existing is not None:
+    if existing is not None and existing.get("status") == "done":
         await set_job_status(
             redis, job_id, status="done", document_id=existing["id"], progress=100
         )
@@ -231,14 +264,21 @@ async def process_document(
         status="processing",
         is_seed=is_seed,
     )
-    await set_job_status(redis, job_id, status="running", document_id=document_id, progress=5)
+    await set_job_status(
+        redis, job_id, status="running", document_id=document_id, progress=5
+    )
 
     any_failures = False
     for page_number, native_text in enumerate(native_pages, start=1):
         try:
             if source_type == "pdf" and looks_like_readable_text(native_text):
                 ok = await _process_native_page(
-                    driver, redis, upload_ip_hash, document_id=document_id, page_number=page_number, text=native_text
+                    driver,
+                    redis,
+                    upload_ip_hash,
+                    document_id=document_id,
+                    page_number=page_number,
+                    text=native_text,
                 )
             else:
                 image_bytes = (
@@ -258,12 +298,33 @@ async def process_document(
                 )
             any_failures = any_failures or not ok
         except Exception:
-            logger.exception("Unhandled error processing page %d of %s", page_number, document_id)
+            logger.exception(
+                "Unhandled error processing page %d of %s", page_number, document_id
+            )
             any_failures = True
 
         progress = 5 + int(90 * page_number / page_count)
         await set_job_status(redis, job_id, status="running", progress=progress)
 
-    final_status = "partial" if any_failures else "done"
+    async with driver.session() as session:
+        result = await session.run(
+            "MATCH (:Document {id: $id})-[:HAS_CHUNK]->(c:Chunk) RETURN count(c) AS count",
+            id=document_id,
+        )
+        record = await result.single()
+        indexed_count = record["count"] if record else 0
+    final_status = (
+        ("partial" if any_failures else "done") if indexed_count else "failed"
+    )
     await set_document_status(driver, document_id, final_status)
-    await set_job_status(redis, job_id, status=final_status, progress=100)
+    await set_job_status(
+        redis,
+        job_id,
+        status=final_status,
+        progress=100,
+        error=(
+            "No readable pages could be indexed. Try a clearer file or retry later."
+            if not indexed_count
+            else None
+        ),
+    )

@@ -24,14 +24,23 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     embedding_model: str = "gemini-embedding-001"
     embedding_dimensions: int = 768
-    extraction_models: list[str] = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]
-    chat_models: list[str] = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]
+    extraction_models: list[str] = [
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+    ]
+    chat_models: list[str] = [
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+    ]
 
     turnstile_secret_key: str = ""
     admin_token: str = "changeme-local-dev-token"
 
     max_upload_mb: int = 20
     max_upload_pages: int = 20
+    enable_graph_enrichment: bool = False
 
     upload_rate_limit: str = "5/hour"
     chat_rate_limit: str = "20/hour"
@@ -48,8 +57,12 @@ class Settings(BaseSettings):
     cost_per_1k_output_tokens_usd: float = 0.0025
     max_estimated_chat_output_tokens: int = 1500
     max_estimated_extraction_output_tokens: int = 800
-    typical_chat_context_tokens: int = 2000  # rough upper bound on assembled retrieval context
-    estimated_vision_input_tokens: int = 1500  # rough per-image cost — no raw text to measure upfront
+    typical_chat_context_tokens: int = (
+        13000  # eight bounded passages plus prompt overhead
+    )
+    estimated_vision_input_tokens: int = (
+        1500  # rough per-image cost — no raw text to measure upfront
+    )
 
     max_graph_nodes: int = 3000
     prune_check_interval_seconds: int = 21600  # 6 hours

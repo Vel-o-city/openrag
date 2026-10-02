@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { stageFromJobStatus } from './UploadPanel'
+import { stageFromJobStatus } from './uploadStatus'
 
 describe('stageFromJobStatus', () => {
   it('maps done/partial/failed statuses directly', () => {

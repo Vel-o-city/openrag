@@ -8,7 +8,12 @@ final context is citable back to a real document.
 from neo4j import AsyncDriver
 
 from app.gemini.client import embed_text
-from app.retrieval.schemas import RetrievalResult, RetrievedChunk, RetrievedEntity, RetrievedRelationship
+from app.retrieval.schemas import (
+    RetrievalResult,
+    RetrievedChunk,
+    RetrievedEntity,
+    RetrievedRelationship,
+)
 
 CHUNK_TOP_K = 5
 ENTITY_TOP_K = 5
@@ -16,7 +21,9 @@ CHUNKS_PER_ENTITY = 2
 MAX_HOP_NEIGHBORS = 30
 
 
-async def _vector_search_chunks(driver: AsyncDriver, embedding: list[float], k: int) -> list[dict]:
+async def _vector_search_chunks(
+    driver: AsyncDriver, embedding: list[float], k: int
+) -> list[dict]:
     async with driver.session() as session:
         result = await session.run(
             """
@@ -33,7 +40,9 @@ async def _vector_search_chunks(driver: AsyncDriver, embedding: list[float], k: 
         return [record.data() async for record in result]
 
 
-async def _vector_search_entities(driver: AsyncDriver, embedding: list[float], k: int) -> list[dict]:
+async def _vector_search_entities(
+    driver: AsyncDriver, embedding: list[float], k: int
+) -> list[dict]:
     async with driver.session() as session:
         result = await session.run(
             """
@@ -49,7 +58,9 @@ async def _vector_search_entities(driver: AsyncDriver, embedding: list[float], k
         return [record.data() async for record in result]
 
 
-async def _entities_mentioned_in_chunks(driver: AsyncDriver, chunk_ids: list[str]) -> list[dict]:
+async def _entities_mentioned_in_chunks(
+    driver: AsyncDriver, chunk_ids: list[str]
+) -> list[dict]:
     if not chunk_ids:
         return []
     async with driver.session() as session:
@@ -90,7 +101,9 @@ async def _representative_chunks_for_entities(
         return [record.data() async for record in result]
 
 
-async def _expand_one_hop(driver: AsyncDriver, entity_ids: list[str]) -> tuple[list[dict], list[dict]]:
+async def _expand_one_hop(
+    driver: AsyncDriver, entity_ids: list[str]
+) -> tuple[list[dict], list[dict]]:
     """Returns (neighbor_entities, relationship_edges) for a 1-hop expansion
     from the seed entities over RELATES_TO in either direction."""
     if not entity_ids:
@@ -134,7 +147,9 @@ async def _expand_one_hop(driver: AsyncDriver, entity_ids: list[str]) -> tuple[l
     return list(neighbors.values()), list(relationships.values())
 
 
-async def _relationships_among(driver: AsyncDriver, entity_ids: list[str]) -> list[dict]:
+async def _relationships_among(
+    driver: AsyncDriver, entity_ids: list[str]
+) -> list[dict]:
     if not entity_ids:
         return []
     async with driver.session() as session:
@@ -150,7 +165,35 @@ async def _relationships_among(driver: AsyncDriver, entity_ids: list[str]) -> li
         return [record.data() async for record in result]
 
 
-async def retrieve(driver: AsyncDriver, query: str) -> RetrievalResult:
+async def retrieve(
+    driver: AsyncDriver, query: str, document_ids: list[str] | None = None
+) -> RetrievalResult:
+    # Rank within the chosen files. Filtering a global top-k afterwards can
+    # return nothing even when the selected document contains the answer.
+    # Entity summaries are shared across files, so scoped answers use only
+    # verbatim passages rather than importing facts from other documents.
+    if document_ids is not None:
+        if not document_ids:
+            return RetrievalResult(chunks=[], entities=[], relationships=[])
+        embedding = await embed_text(query)
+        async with driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (d:Document)-[:HAS_CHUNK]->(c:Chunk)
+                WHERE d.id IN $document_ids AND d.status IN ['done', 'partial']
+                  AND c.embedding IS NOT NULL
+                WITH d, c, vector.similarity.cosine(c.embedding, $embedding) AS score
+                RETURN c.id AS id, c.text AS text, c.page_number AS page_number,
+                       d.id AS document_id, d.filename AS filename
+                ORDER BY score DESC, c.id
+                LIMIT $k
+                """,
+                document_ids=document_ids,
+                embedding=embedding,
+                k=8,
+            )
+            chunks = [RetrievedChunk(**record.data()) async for record in result]
+        return RetrievalResult(chunks=chunks, entities=[], relationships=[])
     query_embedding = await embed_text(query)
 
     seed_chunks = await _vector_search_chunks(driver, query_embedding, CHUNK_TOP_K)
@@ -172,7 +215,9 @@ async def retrieve(driver: AsyncDriver, query: str) -> RetrievalResult:
     # 1-hop Cypher expansion from the seed entity set — the actual graph part
     # of GraphRAG, pulling in structurally-connected entities without needing
     # a direct vector match.
-    neighbor_entities, hop_relationships = await _expand_one_hop(driver, list(entities_by_id.keys()))
+    neighbor_entities, hop_relationships = await _expand_one_hop(
+        driver, list(entities_by_id.keys())
+    )
     for entity in neighbor_entities:
         entities_by_id.setdefault(entity["id"], entity)
 
@@ -185,11 +230,17 @@ async def retrieve(driver: AsyncDriver, query: str) -> RetrievalResult:
     for chunk in extra_chunks:
         chunks_by_id.setdefault(chunk["id"], chunk)
 
-    relationships_among_final = await _relationships_among(driver, list(entities_by_id.keys()))
-    relationships_by_id = {r["id"]: r for r in hop_relationships + relationships_among_final}
+    relationships_among_final = await _relationships_among(
+        driver, list(entities_by_id.keys())
+    )
+    relationships_by_id = {
+        r["id"]: r for r in hop_relationships + relationships_among_final
+    }
 
     return RetrievalResult(
         chunks=[RetrievedChunk(**c) for c in chunks_by_id.values()],
         entities=[RetrievedEntity(**e) for e in entities_by_id.values()],
-        relationships=[RetrievedRelationship(**r) for r in relationships_by_id.values()],
+        relationships=[
+            RetrievedRelationship(**r) for r in relationships_by_id.values()
+        ],
     )

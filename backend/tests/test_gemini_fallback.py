@@ -7,17 +7,26 @@ from app.gemini import client
 
 
 def _quota_error() -> errors.ClientError:
-    return errors.ClientError(429, {"error": {"status": "RESOURCE_EXHAUSTED", "message": "quota"}})
+    return errors.ClientError(
+        429, {"error": {"status": "RESOURCE_EXHAUSTED", "message": "quota"}}
+    )
 
 
 def _bad_request_error() -> errors.ClientError:
-    return errors.ClientError(400, {"error": {"status": "INVALID_ARGUMENT", "message": "bad request"}})
+    return errors.ClientError(
+        400, {"error": {"status": "INVALID_ARGUMENT", "message": "bad request"}}
+    )
 
 
 def _model_unavailable_error() -> errors.ClientError:
     return errors.ClientError(
         404,
-        {"error": {"status": "NOT_FOUND", "message": "This model is no longer available to new users."}},
+        {
+            "error": {
+                "status": "NOT_FOUND",
+                "message": "This model is no longer available to new users.",
+            }
+        },
     )
 
 
@@ -81,7 +90,9 @@ async def test_extract_from_text_falls_back_on_model_unavailable_404(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_extract_from_text_raises_last_error_if_every_model_exhausted(monkeypatch):
+async def test_extract_from_text_raises_last_error_if_every_model_exhausted(
+    monkeypatch,
+):
     monkeypatch.setattr(client.settings, "extraction_models", ["model-a", "model-b"])
 
     async def fake_generate_content(*, model, contents, config):
@@ -111,7 +122,9 @@ async def test_chat_stream_falls_back_to_next_model_on_quota_error(monkeypatch):
         return gen()
 
     with patch.object(client, "get_client") as get_client_mock:
-        get_client_mock.return_value.aio.models.generate_content_stream = fake_generate_content_stream
+        get_client_mock.return_value.aio.models.generate_content_stream = (
+            fake_generate_content_stream
+        )
         chunks = [c async for c in client.chat_stream("sys", "user")]
 
     assert chunks == ["hi"]
@@ -119,7 +132,9 @@ async def test_chat_stream_falls_back_to_next_model_on_quota_error(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_chat_stream_does_not_fall_back_once_a_chunk_was_already_yielded(monkeypatch):
+async def test_chat_stream_does_not_fall_back_once_a_chunk_was_already_yielded(
+    monkeypatch,
+):
     monkeypatch.setattr(client.settings, "chat_models", ["model-a", "model-b"])
     calls = []
 
@@ -133,9 +148,65 @@ async def test_chat_stream_does_not_fall_back_once_a_chunk_was_already_yielded(m
         return gen()
 
     with patch.object(client, "get_client") as get_client_mock:
-        get_client_mock.return_value.aio.models.generate_content_stream = fake_generate_content_stream
+        get_client_mock.return_value.aio.models.generate_content_stream = (
+            fake_generate_content_stream
+        )
         with pytest.raises(errors.ClientError):
             _ = [c async for c in client.chat_stream("sys", "user")]
 
     # only the first model was ever tried — no retry once output has started
     assert calls == ["model-a"]
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_falls_back_on_provider_overload_before_any_tokens(
+    monkeypatch,
+):
+    monkeypatch.setattr(client.settings, "chat_models", ["model-a", "model-b"])
+    calls = []
+
+    async def fake_generate_content_stream(*, model, contents, config):
+        calls.append(model)
+        if model == "model-a":
+            raise errors.ServerError(
+                503, {"error": {"status": "UNAVAILABLE", "message": "high demand"}}
+            )
+
+        async def gen():
+            yield type("Chunk", (), {"text": "Complete answer"})()
+
+        return gen()
+
+    with patch.object(client, "get_client") as get_client_mock:
+        get_client_mock.return_value.aio.models.generate_content_stream = (
+            fake_generate_content_stream
+        )
+        chunks = [chunk async for chunk in client.chat_stream("sys", "user")]
+    assert chunks == ["Complete answer"]
+    assert calls == ["model-a", "model-b"]
+
+
+@pytest.mark.asyncio
+async def test_opted_in_stream_resets_partial_output_before_fallback(monkeypatch):
+    monkeypatch.setattr(client.settings, "chat_models", ["model-a", "model-b"])
+
+    async def fake_generate_content_stream(*, model, contents, config):
+        async def gen():
+            if model == "model-a":
+                yield type("Chunk", (), {"text": "Partial answer from A"})()
+                raise errors.ServerError(
+                    503, {"error": {"status": "UNAVAILABLE", "message": "high demand"}}
+                )
+            yield type("Chunk", (), {"text": "Complete answer from B"})()
+
+        return gen()
+
+    with patch.object(client, "get_client") as get_client_mock:
+        get_client_mock.return_value.aio.models.generate_content_stream = (
+            fake_generate_content_stream
+        )
+        chunks = [
+            chunk
+            async for chunk in client.chat_stream("sys", "user", allow_restart=True)
+        ]
+    assert chunks == ["Partial answer from A", None, "Complete answer from B"]

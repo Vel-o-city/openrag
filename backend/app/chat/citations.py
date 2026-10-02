@@ -11,7 +11,7 @@ from app.chat.schemas import (
 )
 from app.retrieval.schemas import RetrievalResult, RetrievedChunk, RetrievedEntity
 
-LABEL_PATTERN = re.compile(r"\[(E\d+|C\d+)\]")
+LABEL_PATTERN = re.compile(r"\[([EC]\d+(?:\s*[,;]\s*[EC]\d+)*)\]")
 
 # PDF text extraction routinely emits C0 control characters and zero-width
 # characters. They render as nothing, which makes them a convenient place to
@@ -68,7 +68,11 @@ def parse_cited_labels(answer_text: str, trailer: str | None) -> list[str]:
 
     # Redundant fallback signal: regex-scan the visible answer text too, in
     # case the trailing JSON array was malformed or missing.
-    labels_from_text = LABEL_PATTERN.findall(answer_text)
+    labels_from_text = [
+        label.strip()
+        for group in LABEL_PATTERN.findall(answer_text)
+        for label in re.split("[,;]", group)
+    ]
     return list(dict.fromkeys(labels + labels_from_text))
 
 
@@ -145,7 +149,11 @@ def resolve_citations(
         filename_by_document.setdefault(chunk.document_id, chunk.filename)
 
     documents = [
-        CitedDocument(id=document_id, filename=filename_by_document[document_id], pages=sorted(pages))
+        CitedDocument(
+            id=document_id,
+            filename=filename_by_document[document_id],
+            pages=sorted(pages),
+        )
         for document_id, pages in pages_by_document.items()
     ]
 
