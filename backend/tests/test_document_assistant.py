@@ -114,11 +114,15 @@ async def test_followup_keeps_scope_and_history_and_hides_citation_trailer():
                 "Which month?",
                 "ip",
                 ["doc-a"],
-                [chat.HistoryMessage(role="user", text="What is the deadline?")],
+                [
+                    chat.HistoryMessage(role="user", text="hi"),
+                    chat.HistoryMessage(role="user", text="What is the deadline?"),
+                ],
             )
         ]
     assert retrieve.call_args.kwargs["document_ids"] == ["doc-a"]
     assert "What is the deadline?" in retrieve.call_args.args[1]
+    assert retrieve.call_args.args[1] == "What is the deadline?\nWhich month?"
     visible = "".join(
         json.loads(e["data"])["text"] for e in events if e["event"] == "token"
     )

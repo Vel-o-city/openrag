@@ -1,17 +1,42 @@
-from app.chat.citations import parse_cited_labels, resolve_citations, split_answer_and_citations
+from app.chat.citations import (
+    parse_cited_labels,
+    resolve_citations,
+    split_answer_and_citations,
+)
 from app.chat.prompts import CITATION_MARKER
 from app.chat.schemas import MAX_CITATION_TEXT_CHARS, MAX_CITED_CHUNKS, CitationPayload
-from app.retrieval.schemas import RetrievalResult, RetrievedChunk, RetrievedEntity, RetrievedRelationship
-
-ENTITY_A = RetrievedEntity(id="ent-a", name="Ada Lovelace", entity_type="Person", description="...")
-ENTITY_B = RetrievedEntity(id="ent-b", name="Babbage Inc", entity_type="Organization", description="...")
-CHUNK_A = RetrievedChunk(
-    id="chunk-a", text="Ada worked on the engine.", page_number=1, document_id="doc-1", filename="a.pdf"
+from app.retrieval.schemas import (
+    RetrievalResult,
+    RetrievedChunk,
+    RetrievedEntity,
+    RetrievedRelationship,
 )
-REL_AB = RetrievedRelationship(id="rel-ab", source_id="ent-a", target_id="ent-b", predicate="works at", description="...")
+
+ENTITY_A = RetrievedEntity(
+    id="ent-a", name="Ada Lovelace", entity_type="Person", description="..."
+)
+ENTITY_B = RetrievedEntity(
+    id="ent-b", name="Babbage Inc", entity_type="Organization", description="..."
+)
+CHUNK_A = RetrievedChunk(
+    id="chunk-a",
+    text="Ada worked on the engine.",
+    page_number=1,
+    document_id="doc-1",
+    filename="a.pdf",
+)
+REL_AB = RetrievedRelationship(
+    id="rel-ab",
+    source_id="ent-a",
+    target_id="ent-b",
+    predicate="works at",
+    description="...",
+)
 
 LABEL_MAP = {"E1": ENTITY_A, "E2": ENTITY_B, "C1": CHUNK_A}
-RETRIEVAL = RetrievalResult(entities=[ENTITY_A, ENTITY_B], chunks=[CHUNK_A], relationships=[REL_AB])
+RETRIEVAL = RetrievalResult(
+    entities=[ENTITY_A, ENTITY_B], chunks=[CHUNK_A], relationships=[REL_AB]
+)
 
 
 def test_split_answer_and_citations_with_marker():
@@ -65,11 +90,9 @@ def test_resolve_citations_drops_hallucinated_labels_silently():
     assert result.chunks == []
 
 
-def test_resolve_citations_falls_back_to_full_subgraph_when_nothing_resolves():
+def test_uncited_answer_does_not_inherit_retrieved_sources():
     result = resolve_citations([], LABEL_MAP, RETRIEVAL)
-    assert set(result.entities) == {"ent-a", "ent-b"}
-    assert [c.id for c in result.chunks] == ["chunk-a"]
-    assert result.relationships == ["rel-ab"]
+    assert result == CitationPayload(precise=False)
 
 
 # --- provenance actually reaching the payload -------------------------------
@@ -98,10 +121,18 @@ def test_labels_cover_both_kinds_with_entity_names():
 
 def test_documents_aggregate_deduped_sorted_pages():
     chunks = [
-        RetrievedChunk(id="c1", text="one", page_number=7, document_id="doc-1", filename="a.pdf"),
-        RetrievedChunk(id="c2", text="two", page_number=2, document_id="doc-1", filename="a.pdf"),
-        RetrievedChunk(id="c3", text="three", page_number=7, document_id="doc-1", filename="a.pdf"),
-        RetrievedChunk(id="c4", text="four", page_number=1, document_id="doc-2", filename="b.pdf"),
+        RetrievedChunk(
+            id="c1", text="one", page_number=7, document_id="doc-1", filename="a.pdf"
+        ),
+        RetrievedChunk(
+            id="c2", text="two", page_number=2, document_id="doc-1", filename="a.pdf"
+        ),
+        RetrievedChunk(
+            id="c3", text="three", page_number=7, document_id="doc-1", filename="a.pdf"
+        ),
+        RetrievedChunk(
+            id="c4", text="four", page_number=1, document_id="doc-2", filename="b.pdf"
+        ),
     ]
     label_map = {f"C{i + 1}": c for i, c in enumerate(chunks)}
     retrieval = RetrievalResult(entities=[], chunks=chunks, relationships=[])
@@ -118,7 +149,9 @@ def test_documents_aggregate_deduped_sorted_pages():
 
 def test_long_chunk_text_is_clipped_and_flagged():
     long_text = "word " * 1000  # 5000 chars
-    chunk = RetrievedChunk(id="c1", text=long_text, page_number=1, document_id="doc-1", filename="a.pdf")
+    chunk = RetrievedChunk(
+        id="c1", text=long_text, page_number=1, document_id="doc-1", filename="a.pdf"
+    )
     retrieval = RetrievalResult(entities=[], chunks=[chunk], relationships=[])
 
     cited = resolve_citations(["C1"], {"C1": chunk}, retrieval).chunks[0]
@@ -130,7 +163,11 @@ def test_long_chunk_text_is_clipped_and_flagged():
 
 def test_clipping_prefers_a_word_boundary():
     chunk = RetrievedChunk(
-        id="c1", text="word " * 1000, page_number=1, document_id="doc-1", filename="a.pdf"
+        id="c1",
+        text="word " * 1000,
+        page_number=1,
+        document_id="doc-1",
+        filename="a.pdf",
     )
     retrieval = RetrievalResult(entities=[], chunks=[chunk], relationships=[])
 
@@ -140,7 +177,9 @@ def test_clipping_prefers_a_word_boundary():
 
 def test_chunk_count_is_capped():
     chunks = [
-        RetrievedChunk(id=f"c{i}", text="x", page_number=1, document_id="doc-1", filename="a.pdf")
+        RetrievedChunk(
+            id=f"c{i}", text="x", page_number=1, document_id="doc-1", filename="a.pdf"
+        )
         for i in range(MAX_CITED_CHUNKS + 5)
     ]
     label_map = {f"C{i + 1}": c for i, c in enumerate(chunks)}
@@ -152,7 +191,9 @@ def test_chunk_count_is_capped():
 
 def test_control_and_zero_width_characters_are_stripped():
     hidden = "Visible​textwith‮hidden﻿parts"
-    chunk = RetrievedChunk(id="c1", text=hidden, page_number=1, document_id="doc-1", filename="a.pdf")
+    chunk = RetrievedChunk(
+        id="c1", text=hidden, page_number=1, document_id="doc-1", filename="a.pdf"
+    )
     retrieval = RetrievalResult(entities=[], chunks=[chunk], relationships=[])
 
     text = resolve_citations(["C1"], {"C1": chunk}, retrieval).chunks[0].text
@@ -161,7 +202,11 @@ def test_control_and_zero_width_characters_are_stripped():
 
 def test_newlines_and_tabs_survive_sanitizing():
     chunk = RetrievedChunk(
-        id="c1", text="line one\nline two\tindented", page_number=1, document_id="doc-1", filename="a.pdf"
+        id="c1",
+        text="line one\nline two\tindented",
+        page_number=1,
+        document_id="doc-1",
+        filename="a.pdf",
     )
     retrieval = RetrievalResult(entities=[], chunks=[chunk], relationships=[])
 
@@ -176,13 +221,11 @@ def test_precise_is_true_when_labels_resolve():
     assert resolve_citations(["C1"], LABEL_MAP, RETRIEVAL).precise is True
 
 
-def test_fallback_sets_precise_false_but_still_populates_labels():
-    result = resolve_citations([], LABEL_MAP, RETRIEVAL)
+def test_only_hallucinated_labels_do_not_attach_unrelated_evidence():
+    result = resolve_citations(["C99", "E99"], LABEL_MAP, RETRIEVAL)
     assert result.precise is False
-    # Labels must still resolve on this path, or inline markers would go dead.
-    assert result.labels["C1"].id == "chunk-a"
-    assert result.labels["E1"].name == "Ada Lovelace"
-    assert result.chunks[0].label == "C1"
+    assert result.labels == {}
+    assert result.chunks == result.documents == []
 
 
 def test_empty_payload_has_same_keys_as_a_populated_one():

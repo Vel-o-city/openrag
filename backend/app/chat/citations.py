@@ -77,9 +77,7 @@ def parse_cited_labels(answer_text: str, trailer: str | None) -> list[str]:
 
 
 def _label_by_object_id(label_map: dict[str, object]) -> dict[str, str]:
-    """Invert the label map so a resolved object can name the label it was
-    cited as. Needed on the fallback path too, where objects are pulled from
-    the retrieval result rather than looked up by label."""
+    """Invert the label map so resolved objects retain their source labels."""
     return {obj.id: label for label, obj in label_map.items() if hasattr(obj, "id")}
 
 
@@ -92,11 +90,9 @@ def resolve_citations(
     label simply fails to resolve and is dropped, never reaching the
     frontend as a fake id.
 
-    Pragmatic fallback: if nothing resolves at all, return the entire
-    retrieved subgraph as "used" instead of the model-selected subset — less
-    precise, but still delivers the visual citation-highlight payoff. That
-    case sets precise=False so the UI can present those passages as merely
-    retrieved rather than actually cited.
+    Retrieved passages are not evidence of use. If no labels resolve, return
+    no sources: greetings, refusals, and uncited answers must not acquire
+    arbitrary source cards just because retrieval ran.
     """
     cited_entities: dict[str, RetrievedEntity] = {}
     cited_chunks: dict[str, RetrievedChunk] = {}
@@ -110,8 +106,7 @@ def resolve_citations(
 
     precise = bool(cited_entities or cited_chunks)
     if not precise:
-        cited_entities = {e.id: e for e in retrieval.entities}
-        cited_chunks = {c.id: c for c in retrieval.chunks}
+        return CitationPayload(precise=False)
 
     cited_relationships = [
         rel
@@ -121,8 +116,7 @@ def resolve_citations(
 
     label_of = _label_by_object_id(label_map)
 
-    # Bound the payload: the fallback path can carry ~80 chunks, and a
-    # vision-transcribed page is a single unbounded chunk.
+    # Bound the payload: a vision-transcribed page can be an unbounded chunk.
     kept_chunks = list(cited_chunks.values())[:MAX_CITED_CHUNKS]
 
     chunks: list[CitedChunk] = []

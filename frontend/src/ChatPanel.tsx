@@ -11,6 +11,7 @@ interface ChatMessage {
   text: string
   citations?: Citations
   error?: string
+  showSuggestions?: boolean
 }
 interface Props {
   documents: DocumentInfo[]
@@ -106,7 +107,12 @@ export function ChatPanel({ documents, loading, onOpenSource }: Props) {
       for await (const event of streamSSE(response)) {
         if (event.event === 'reset') {
           text = ''
-          updateLast({ text: '', citations: undefined, error: undefined })
+          updateLast({
+            text: '',
+            citations: undefined,
+            error: undefined,
+            showSuggestions: false,
+          })
         }
         if (event.event === 'token') {
           text += JSON.parse(event.data).text
@@ -114,6 +120,10 @@ export function ChatPanel({ documents, loading, onOpenSource }: Props) {
         }
         if (event.event === 'citations')
           updateLast({ citations: JSON.parse(event.data) })
+        if (event.event === 'guidance')
+          updateLast({
+            showSuggestions: JSON.parse(event.data).show_suggestions === true,
+          })
         if (event.event === 'error')
           updateLast({ error: JSON.parse(event.data).message })
         if (event.event === 'done') completed = true
@@ -233,7 +243,7 @@ export function ChatPanel({ documents, loading, onOpenSource }: Props) {
               isStreaming: live,
               resolvable,
             })
-            const chunks = citations
+            const chunks = citations?.precise
               ? [...citations.chunks].sort(
                   (a, b) =>
                     (order.indexOf(a.label) < 0
@@ -302,14 +312,29 @@ export function ChatPanel({ documents, loading, onOpenSource }: Props) {
                         )}
                     </div>
                   )}
+                  {message.showSuggestions &&
+                    !live &&
+                    !message.error &&
+                    index === messages.length - 1 && (
+                      <div className="suggestions conversation-suggestions">
+                        <span className="eyebrow">TRY A QUESTION</span>
+                        {suggestions.map((question) => (
+                          <button
+                            key={question}
+                            aria-label={question}
+                            disabled={loading || !documents.length}
+                            onClick={() => void sendMessage(question)}
+                          >
+                            <span>{question}</span>
+                            <span className="suggestion-arrow">↗</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   {!!chunks.length && (
                     <div className="answer-sources">
                       <div className="sources-heading">
-                        <span>
-                          {citations?.precise
-                            ? 'SOURCES'
-                            : 'RELATED PASSAGES · NO PRECISE CITATIONS'}
-                        </span>
+                        <span>SOURCES</span>
                         <span>Click to verify ↗</span>
                       </div>
                       <div className="source-cards">

@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, StringConstraints
 from sse_starlette.sse import EventSourceResponse
 
 from app.chat.citations import parse_cited_labels, resolve_citations
+from app.chat.conversation import conversational_reply
 from app.chat.guardrails import find_unverified_urls
 from app.chat.prompts import (
     CITATION_MARKER,
@@ -28,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
-EMPTY_CITATIONS = CitationPayload().model_dump_json()
+EMPTY_CITATIONS = CitationPayload(precise=False).model_dump_json()
 
 BUDGET_EXCEEDED_MESSAGE = (
     "This demo has hit its daily budget cap — please check back tomorrow, "
@@ -60,6 +61,17 @@ async def _stream_chat_response(
     history: list[HistoryMessage] | None = None,
 ):
     history = history or []
+    conversational = conversational_reply(question)
+    if conversational:
+        text, show_suggestions = conversational
+        yield {"event": "token", "data": json.dumps({"text": text})}
+        yield {
+            "event": "guidance",
+            "data": json.dumps({"show_suggestions": show_suggestions}),
+        }
+        yield {"event": "citations", "data": EMPTY_CITATIONS}
+        yield {"event": "done", "data": "{}"}
+        return
     if document_ids == []:
         yield {
             "event": "token",
@@ -93,7 +105,11 @@ async def _stream_chat_response(
     # an exception here kills the async generator outright and the SSE
     # connection gets torn down mid-chunk instead of ending cleanly.
     try:
-        previous_questions = [m.text for m in history if m.role == "user"][-2:]
+        previous_questions = [
+            m.text
+            for m in history
+            if m.role == "user" and conversational_reply(m.text) is None
+        ][-2:]
         retrieval_query = "\n".join(previous_questions + [question])
         retrieval = await retrieve(
             get_driver(), retrieval_query, document_ids=document_ids

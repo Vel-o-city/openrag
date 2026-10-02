@@ -20,7 +20,7 @@ OpenRAG is a document Q&A portfolio demo. Visitors can immediately ask questions
 
 React/TypeScript/Vite → FastAPI → Gemini embeddings and streamed generation → Neo4j document/chunk storage. Redis stores ingestion jobs and cost reservations. PDF text comes from `pypdf`; scanned pages are rendered with `pypdfium2` and transcribed by Gemini vision.
 
-Selected-document retrieval ranks embedded chunks **inside the selected documents**, rather than retrieving global matches and filtering afterwards. Source labels are assigned by the backend and resolved against real chunk IDs. Unknown labels are discarded. If the model omits usable citations, the UI labels returned passages as related passages rather than precise citations. Citations identify evidence; they do not guarantee that every claim is correct.
+Selected-document retrieval ranks embedded chunks **inside the selected documents**, rather than retrieving global matches and filtering afterwards. Source labels are assigned by the backend and resolved against real chunk IDs. Unknown labels are discarded. If the model omits usable citations, no arbitrary retrieved passages are attached as sources. Greetings and basic help replies bypass retrieval/model calls and offer clickable document questions. Citations identify evidence; they do not guarantee that every claim is correct.
 
 Native text is indexed without requiring graph extraction. Optional legacy graph enrichment (`ENABLE_GRAPH_ENRICHMENT=true`) and graph/admin APIs remain available behind the scenes, but document chat uses source passages only.
 

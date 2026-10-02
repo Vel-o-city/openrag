@@ -119,3 +119,39 @@ it('replaces interrupted model output on reset instead of combining different an
   expect(screen.queryByText('Discarded attempt.')).not.toBeInTheDocument()
   expect(screen.getByText('The final answer')).toBeInTheDocument()
 })
+
+it('offers clickable document questions after a greeting without arbitrary source cards', async () => {
+  const source = {
+    ...docs[0],
+    is_seed: true,
+    filename: 'universal-declaration-of-human-rights.pdf',
+  }
+  const fetch = vi
+    .fn()
+    .mockResolvedValueOnce(
+      new Response(
+        `event: token\ndata: {"text":"Hi! Pick a question below, or ask your own."}\n\nevent: guidance\ndata: {"show_suggestions":true}\n\nevent: citations\ndata: ${JSON.stringify({ ...citations, precise: false })}\n\nevent: done\ndata: {}\n\n`,
+      ),
+    )
+    .mockResolvedValueOnce(
+      response('Everyone has the right to education [C1].'),
+    )
+  vi.stubGlobal('fetch', fetch)
+  render(
+    <ChatPanel documents={[source]} loading={false} onOpenSource={vi.fn()} />,
+  )
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: 'hi' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Send question' }))
+  const question = 'What does Article 26 say about the right to education?'
+  const suggestion = await screen.findByRole('button', { name: question })
+  expect(
+    screen.queryByRole('button', { name: /Open related passage/ }),
+  ).not.toBeInTheDocument()
+  expect(screen.queryByText(/RELATED PASSAGES/)).not.toBeInTheDocument()
+  fireEvent.click(suggestion)
+  await screen.findByRole('button', { name: 'Citation 1' })
+  expect(JSON.parse(fetch.mock.calls[1][1].body).message).toBe(question)
+  expect(
+    screen.queryByRole('button', { name: question }),
+  ).not.toBeInTheDocument()
+})

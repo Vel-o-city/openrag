@@ -374,6 +374,10 @@ progress {
   color: #8060a6;
   margin: -10px 0 24px;
 }
+.conversation-suggestions {
+  margin: 24px 0 0;
+  max-width: 560px;
+}
 .library-notice {
   font-size: 12px;
   line-height: 1.7;
