@@ -4,7 +4,7 @@
 
 [Live demo](https://openrag.sanket.website) · [Source code](https://github.com/Vel-o-city/openrag)
 
-OpenRAG is a document Q&A portfolio demo. Visitors can try three fictional sample PDFs or upload a PDF/image of their own. Answers stream into the chat with numbered citations. Clicking a citation opens the extracted passage, filename, and page number so the reader can check the evidence.
+OpenRAG is a document Q&A portfolio demo. Visitors can immediately ask questions about the official UN Universal Declaration of Human Rights, or upload a PDF/image of their own. Answers stream into the chat with numbered citations. Clicking a citation opens the extracted passage, filename, and page number so the reader can check the evidence.
 
 ## What works
 
@@ -48,14 +48,16 @@ npm ci
 VITE_API_BASE_URL=http://localhost:8000 npm run dev
 ```
 
-Load the fictional demo PDFs through the real ingestion pipeline:
+Load the official demo PDF through the real ingestion pipeline:
 
 ```bash
 cd backend
 uv run python -m scripts.seed_graph
 ```
 
-The sample PDFs and their Markdown sources are in `backend/scripts/seed_documents/`. Seeds are pinned against automatic pruning. The library starts with those samples selected; changing sources starts a new chat.
+The unchanged eight-page OHCHR PDF and its provenance/checksum manifest are in `backend/scripts/seed_documents/`. Seeding checks the checksum and requires complete indexing before publishing the source. A successful run unpins the three former fictional seeds while preserving visitor uploads. Seeds are protected from automatic pruning. The library selects the declaration on first load, with questions about equality, education, and freedom of expression. Citation inspectors link to the official PDF at the cited page. Changing sources starts a new chat.
+
+After deploying to an existing database, run the authenticated `POST /api/admin/seed` endpoint (or the seed module against that environment) once to update the preloaded catalog. See the seed directory README for source attribution and reuse terms.
 
 For an isolated stack alongside other projects:
 

@@ -56,7 +56,12 @@ describe('document chat', () => {
       history: [],
     })
     fireEvent.click(citation)
-    expect(open).toHaveBeenCalledWith({ chunk, number: 1 })
+    expect(open).toHaveBeenCalledWith({
+      chunk,
+      number: 1,
+      originalUrl: undefined,
+      title: undefined,
+    })
     await waitFor(() => expect(screen.getByRole('textbox')).not.toBeDisabled())
     fireEvent.change(screen.getByRole('textbox'), {
       target: { value: 'Which month?' },

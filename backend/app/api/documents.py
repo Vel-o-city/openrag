@@ -121,6 +121,9 @@ PUBLIC_FIELDS = (
     "uploaded_at",
     "status",
     "is_seed",
+    "title",
+    "publisher",
+    "source_url",
 )
 
 
@@ -138,7 +141,8 @@ async def list_documents(
             OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c:Chunk)
             WITH d, count(c) AS chunk_count
             RETURN d { .id, .filename, .mime_type, .source_type, .page_count,
-                       .uploaded_at, .status, .is_seed, chunk_count: chunk_count } AS document
+                       .uploaded_at, .status, .is_seed, .title, .publisher,
+                       .source_url, chunk_count: chunk_count } AS document
             ORDER BY d.is_seed DESC, d.uploaded_at DESC
             LIMIT 23
             """,

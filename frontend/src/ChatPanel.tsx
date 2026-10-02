@@ -30,12 +30,15 @@ export function ChatPanel({ documents, loading, onOpenSource }: Props) {
     if (messages.length)
       bottom.current?.scrollIntoView?.({ behavior: 'smooth', block: 'end' })
   }, [messages])
-  const hasSamples = documents.length > 0 && documents.every((d) => d.is_seed)
-  const suggestions = hasSamples
+  const hasDeclaration =
+    documents.length === 1 &&
+    documents[0].is_seed &&
+    documents[0].filename === 'universal-declaration-of-human-rights.pdf'
+  const suggestions = hasDeclaration
     ? [
-        'What is the Kepler Initiative?',
-        'How are Meridian Labs and Halden Institute connected?',
-        'Who leads the research, and what are the goals?',
+        'What does Article 1 say about equality?',
+        'What does Article 26 say about the right to education?',
+        'Which article protects freedom of opinion and expression?',
       ]
     : [
         'Summarize the key points of this document.',
@@ -57,7 +60,13 @@ export function ChatPanel({ documents, loading, onOpenSource }: Props) {
     const chunk = citations.chunks.find((c) => c.label === label)
     if (chunk) {
       setActiveSource(chunk.id)
-      onOpenSource({ chunk, number })
+      const document = documents.find((d) => d.id === chunk.document_id)
+      onOpenSource({
+        chunk,
+        number,
+        originalUrl: document?.source_url,
+        title: document?.title,
+      })
     }
   }
   async function sendMessage(question = input.trim(), conversation = messages) {
@@ -153,8 +162,19 @@ export function ChatPanel({ documents, loading, onOpenSource }: Props) {
               <span>with the answers inside.</span>
             </h2>
             <p>
-              Upload a file, ask a question, and trace the answer
-              <br className="desktop-break" /> back to the exact source passage.
+              {hasDeclaration ? (
+                <>
+                  The Universal Declaration of Human Rights is already loaded.
+                  <br className="desktop-break" /> Ask a question and check the
+                  official UN source.
+                </>
+              ) : (
+                <>
+                  Upload a file, ask a question, and trace the answer
+                  <br className="desktop-break" /> back to the exact source
+                  passage.
+                </>
+              )}
             </p>
             <div className="welcome-steps">
               <span>
@@ -169,11 +189,14 @@ export function ChatPanel({ documents, loading, onOpenSource }: Props) {
             </div>
             <div className="suggestions">
               <span className="eyebrow">
-                {hasSamples ? 'EXPLORE THE SAMPLE DOCUMENTS' : 'TRY A QUESTION'}
+                {hasDeclaration
+                  ? 'TRY IT NOW · NO UPLOAD NEEDED'
+                  : 'TRY A QUESTION'}
               </span>
               {suggestions.map((question, i) => (
                 <button
                   key={question}
+                  aria-label={question}
                   disabled={!documents.length || loading}
                   onClick={() => void sendMessage(question)}
                 >

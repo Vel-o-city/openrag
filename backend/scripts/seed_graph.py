@@ -1,20 +1,14 @@
-"""Loads the curated seed documents into the graph.
+"""Load the official demo PDF through the real ingestion pipeline.
 
-Runs them through the real ingestion pipeline, so the entities, embeddings and
-relationships are genuine rather than hand-written fixtures — the demo graph is
-the pipeline's actual output.
-
-    uv run python -m scripts.seed_graph
-
-Run as a module, from the backend directory — the plain script path puts
-scripts/ on sys.path instead of the backend root, so `import app` fails.
-
-Idempotent: a document already present by sha256 is pinned rather than
-re-ingested, so re-running costs nothing.
+Run from backend: uv run python -m scripts.seed_graph
+Checks the bundled source checksum, publishes provenance after full indexing,
+and retires the known fictional samples without deleting visitor uploads.
+Completed copies are reused without repeating embedding calls.
 """
 
 import asyncio
 import hashlib
+import json
 import logging
 from pathlib import Path
 
@@ -23,11 +17,17 @@ from redis.asyncio import Redis
 
 from app.graph.writer import find_document_by_sha256, mark_document_as_seed
 from app.ingestion.pipeline import process_document
-from app.jobs.manager import new_job_id
+from app.jobs.manager import get_job_status, new_job_id
 
 logger = logging.getLogger(__name__)
 
 SEED_DIR = Path(__file__).parent / "seed_documents"
+MANIFEST = json.loads((SEED_DIR / "manifest.json").read_text())
+LEGACY_SEEDS = [
+    "halden-institute-memo.pdf",
+    "kepler-initiative-report.pdf",
+    "meridian-labs-overview.pdf",
+]
 
 # Seeded documents are attributed to this instead of a hashed client IP. It
 # never matches a real visitor's hash, so seeding can't consume anyone's
@@ -36,7 +36,7 @@ SEED_IP_HASH = "seed"
 
 
 def discover_seed_documents(directory: Path = SEED_DIR) -> list[Path]:
-    return sorted(directory.glob("*.pdf"))
+    return [directory / entry["filename"] for entry in MANIFEST]
 
 
 async def seed_document(driver: AsyncDriver, redis: Redis, path: Path) -> str:
@@ -44,33 +44,77 @@ async def seed_document(driver: AsyncDriver, redis: Redis, path: Path) -> str:
     Returns "ingested" or "already-present"."""
     content = path.read_bytes()
     sha256 = hashlib.sha256(content).hexdigest()
+    entry = next((item for item in MANIFEST if item["filename"] == path.name), None)
+    if entry and sha256 != entry["sha256"]:
+        raise RuntimeError(f"Source checksum mismatch: {path.name}")
 
     # process_document short-circuits on this same check *before* it reaches
     # write_document, so an existing copy would never get the is_seed flag.
     # Pin it here instead.
     existing = await find_document_by_sha256(driver, sha256)
     if existing is not None:
+        if existing.get("status") != "done":
+            raise RuntimeError(f"Existing sample is incomplete: {path.name}")
         await mark_document_as_seed(driver, existing["id"])
         return "already-present"
 
+    job_id = new_job_id()
     await process_document(
         driver,
         redis,
         document_id=new_job_id(),
-        job_id=new_job_id(),
+        job_id=job_id,
         filename=path.name,
         content=content,
         mime_type="application/pdf",
         upload_ip_hash=SEED_IP_HASH,
-        is_seed=True,
+        is_seed=False,
     )
+    job = await get_job_status(redis, job_id)
+    if not job or job.get("status") != "done":
+        raise RuntimeError(f"Sample did not finish indexing: {path.name}")
     return "ingested"
+
+
+async def publish_seed_catalog(driver: AsyncDriver) -> None:
+    """Publish provenance and retire only the known fictional samples atomically.
+
+    The replacement must be fully indexed before the previous demo is unpinned.
+    Visitor uploads and their chunks are preserved.
+    """
+
+    async def publish(tx):
+        for entry in MANIFEST:
+            result = await tx.run(
+                """
+                MATCH (d:Document {sha256: $sha256, status: 'done'})
+                SET d.is_seed = true, d.title = $title,
+                    d.publisher = $publisher, d.source_url = $source_url
+                RETURN d.id AS id
+                """,
+                **entry,
+            )
+            if await result.single() is None:
+                raise RuntimeError("Cannot publish an incomplete source catalog")
+        await tx.run(
+            """
+            MATCH (d:Document)
+            WHERE d.is_seed = true AND d.upload_ip_hash = $seed_ip
+                  AND d.filename IN $filenames
+            SET d.is_seed = false
+            """,
+            seed_ip=SEED_IP_HASH,
+            filenames=LEGACY_SEEDS,
+        )
+
+    async with driver.session() as session:
+        await session.execute_write(publish)
 
 
 async def seed_graph(driver: AsyncDriver, redis: Redis) -> dict[str, int]:
     documents = discover_seed_documents()
     if not documents:
-        raise RuntimeError(f"No seed PDFs in {SEED_DIR} — run scripts/build_seed_pdfs.py first.")
+        raise RuntimeError(f"No seed PDFs in {SEED_DIR}")
 
     counts = {"ingested": 0, "already-present": 0, "failed": 0}
     for path in documents:
@@ -83,6 +127,8 @@ async def seed_graph(driver: AsyncDriver, redis: Redis) -> dict[str, int]:
             counts[outcome] += 1
             logger.info("%s: %s", path.name, outcome)
 
+    if counts["failed"] == 0:
+        await publish_seed_catalog(driver)
     return counts
 
 

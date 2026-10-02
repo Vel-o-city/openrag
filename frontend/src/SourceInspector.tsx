@@ -5,6 +5,8 @@ import type { CitedChunk } from './citations'
 export interface OpenSource {
   chunk: CitedChunk
   number: number | null
+  originalUrl?: string
+  title?: string
 }
 export function SourceInspector({
   source,
@@ -61,7 +63,18 @@ export function SourceInspector({
         role="dialog"
         aria-modal="true"
         onKeyDown={(e) => {
-          if (e.key === 'Tab') e.preventDefault()
+          if (e.key !== 'Tab') return
+          const controls =
+            e.currentTarget.querySelectorAll<HTMLElement>('button, a[href]')
+          const first = controls[0]
+          const last = controls[controls.length - 1]
+          if (e.shiftKey && document.activeElement === first) {
+            e.preventDefault()
+            last.focus()
+          } else if (!e.shiftKey && document.activeElement === last) {
+            e.preventDefault()
+            first.focus()
+          }
         }}
       >
         <div className="inspector-heading">
@@ -79,10 +92,21 @@ export function SourceInspector({
         <div className="inspector-document">
           <span className="file-icon">FILE</span>
           <div>
-            <strong>{source.chunk.filename}</strong>
+            <strong>{source.title || source.chunk.filename}</strong>
             <small>Page {source.chunk.page_number}</small>
           </div>
         </div>
+
+        {source.originalUrl && (
+          <a
+            className="original-source-link"
+            href={`${source.originalUrl}#page=${source.chunk.page_number}`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Verify page {source.chunk.page_number} in the official PDF ↗
+          </a>
+        )}
         <div className="passage-label">
           <span>EXTRACTED SOURCE PASSAGE</span>
           {loading && <span role="status">Loading…</span>}

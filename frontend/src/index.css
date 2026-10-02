@@ -359,6 +359,21 @@ progress {
   line-height: 1.6;
   margin: 18px 8px;
 }
+.sample-note a {
+  display: block;
+  margin-top: 8px;
+  color: #8060a6;
+}
+.document-selected .document-description strong {
+  white-space: normal;
+  line-height: 1.5;
+}
+.original-source-link {
+  display: block;
+  font-size: 12px;
+  color: #8060a6;
+  margin: -10px 0 24px;
+}
 .library-notice {
   font-size: 12px;
   line-height: 1.7;

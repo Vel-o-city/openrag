@@ -12,6 +12,9 @@ export interface DocumentInfo {
   status: string
   is_seed: boolean
   chunk_count: number
+  title?: string
+  publisher?: string
+  source_url?: string
 }
 
 export default function App() {
@@ -163,7 +166,7 @@ export default function App() {
           {!loading && !error && documents.length === 0 && (
             <p className="library-notice">Upload a document to get started.</p>
           )}
-          {(['uploads', 'samples'] as const).map((group) => {
+          {(['samples', 'uploads'] as const).map((group) => {
             const items = documents.filter((d) =>
               group === 'samples' ? d.is_seed : !d.is_seed,
             )
@@ -171,7 +174,7 @@ export default function App() {
             return (
               <section key={group}>
                 <h3 className="group-heading">
-                  {group === 'samples' ? 'SAMPLE DOCUMENTS' : 'YOUR UPLOADS'}
+                  {group === 'samples' ? 'PRELOADED SOURCE' : 'YOUR UPLOADS'}
                   <span>{items.length}</span>
                 </h3>
                 {items.map((doc) => {
@@ -198,10 +201,11 @@ export default function App() {
                           : 'IMG'}
                       </span>
                       <span className="document-description">
-                        <strong title={doc.filename}>
-                          {doc.filename
-                            .replace(/\.pdf$/i, '')
-                            .replace(/_/g, ' ')}
+                        <strong title={doc.title || doc.filename}>
+                          {doc.title ||
+                            doc.filename
+                              .replace(/\.pdf$/i, '')
+                              .replace(/_/g, ' ')}
                         </strong>
                         <small>
                           {doc.page_count}{' '}
@@ -222,8 +226,19 @@ export default function App() {
           })}
           {documents.some((d) => d.is_seed) && (
             <p className="sample-note">
-              Samples describe fictional organizations. Try them before
-              uploading a file.
+              Official UN text, ready to ask. No upload needed.
+              {documents
+                .filter((d) => d.is_seed && d.source_url)
+                .map((doc) => (
+                  <a
+                    key={doc.id}
+                    href={doc.source_url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {doc.publisher || 'Original source'} · View original PDF ↗
+                  </a>
+                ))}
             </p>
           )}
         </div>
