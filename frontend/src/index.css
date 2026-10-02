@@ -910,6 +910,9 @@ progress {
   padding-top: 20px;
   border-top: 1px solid #eee7f5;
 }
+.mobile-library-close {
+  display: none;
+}
 .mobile-toolbar,
 .drawer-backdrop {
   display: none;
@@ -988,6 +991,9 @@ progress {
   }
 }
 @media (max-width: 760px) {
+  .mobile-library-close {
+    display: grid;
+  }
   .workspace {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: 63px 42px minmax(0, 1fr);

@@ -113,7 +113,7 @@ export default function App() {
       {libraryOpen && (
         <button
           className="drawer-backdrop"
-          aria-label="Close documents"
+          aria-label="Dismiss document drawer"
           onClick={() => setLibraryOpen(false)}
         />
       )}
@@ -130,6 +130,13 @@ export default function App() {
             onClick={() => void loadDocuments()}
           >
             ↻
+          </button>
+          <button
+            className="icon-button mobile-library-close"
+            aria-label="Close documents"
+            onClick={() => setLibraryOpen(false)}
+          >
+            ×
           </button>
         </div>
         <UploadPanel onComplete={(id) => loadDocuments(id)} />
